@@ -90,7 +90,8 @@ export async function sendAiMessage(params: SendAiMessageParams): Promise<{
 
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.error || `خطأ في استجابة الخادم (${response.status})`);
+      // The API returns the user-facing reason in `reply`; prefer it over a generic status message.
+      throw new Error(errData.reply || errData.error || `خطأ في استجابة الخادم (${response.status})`);
     }
 
     return await response.json();

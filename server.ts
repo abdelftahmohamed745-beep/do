@@ -101,11 +101,12 @@ async function startServer() {
 
       return res.status(200).json(outcome);
     } catch (error: any) {
-      console.error("[AI Chat Route Error]:", error);
+      const message = error instanceof Error ? error.message : String(error || "خطأ غير متوقع");
+      console.error("[AI Chat Route Error] Unhandled failure:", error);
       return res.status(500).json({
-        reply: `حدث خطأ أثناء معالجة الطلب: ${error?.message || "خطأ غير متوقع"}`,
+        reply: `حدث خطأ أثناء معالجة الطلب: ${message}`,
         status: "failed",
-        error: error?.message
+        error: message
       });
     }
   });

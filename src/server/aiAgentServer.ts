@@ -24,7 +24,8 @@ function getGemini(): GoogleGenAI | null {
 }
 
 // Model cascade: try fast and capable production models in sequence to prevent downtime or demand spikes
-const CANDIDATE_MODELS = ['gemini-3.8-flash', 'gemini-flash-latest'];
+// Keep the cascade on stable model IDs. Invalid/retired IDs can turn a normal chat into a server error.
+const CANDIDATE_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash'];
 
 async function generateWithCascade(
   ai: GoogleGenAI,
@@ -521,7 +522,7 @@ function generateDeterministicSummary(results: AiToolResult[]): string {
 
   let text = '';
   if (successItems.length > 0) {
-    text += 'تم تنفيذ العمليات التالية بنجاح:\n' +
+    text += 'تم تنفيذ العمليات الت��لية بنجاح:\n' +
       successItems.map((s) => `• ${s.result?.message || 'تمت العملية: ' + s.toolName}`).join('\n');
   }
   if (failedItems.length > 0) {
