@@ -1,0 +1,1252 @@
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  Send,
+  Bot,
+  User,
+  CheckCircle2,
+  AlertTriangle,
+  XCircle,
+  Play,
+  Pause,
+  Plus,
+  RefreshCw,
+  Clock,
+  ShieldAlert,
+  Terminal,
+  Zap,
+  Activity,
+  ChevronDown,
+  ChevronUp,
+  MessageSquare,
+  History,
+  Trash2,
+  Sparkles,
+  ArrowRight
+} from 'lucide-react';
+import { DoctorProfile, ClinicMember } from '../../types';
+import {
+  AiAgentMessage,
+  AiToolCall,
+  AiAutonomousTask,
+  AiAuditLog,
+  AiConversation
+} from '../../types/aiAgent';
+import {
+  sendAiMessage,
+  executeDirectTool,
+  fetchAiStatus,
+  getClinicAiTasks,
+  saveClinicAiTask,
+  toggleClinicAiTaskStatus,
+  getClinicAiAuditLogs,
+  getClinicAiConversations,
+  getAiConversation,
+  createAiConversation,
+  saveAiMessages,
+  deleteAiConversation,
+  getActiveConversationId,
+  setActiveConversationId,
+  getLocalConversations
+} from '../../services/ai/aiAgentClient';
+
+interface AiAgentControlCenterProps {
+  doctor: DoctorProfile;
+  currentMember: ClinicMember | null;
+  isDoctorOwner: boolean;
+  isSubscriptionActive: boolean;
+  onClose?: () => void;
+  onShowToast?: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
+}
+
+export const AiAgentControlCenter: React.FC<AiAgentControlCenterProps> = ({
+  doctor,
+  currentMember,
+  isDoctorOwner,
+  isSubscriptionActive,
+  onClose,
+  onShowToast
+}) => {
+  const [activeTab, setActiveTab] = useState<'chat' | 'tasks' | 'audit'>('chat');
+  const [inputMessage, setInputMessage] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [aiStatus, setAiStatus] = useState<{ provider: string; status: string; hasApiKey: boolean }>({
+    provider: 'checking...',
+    status: 'checking',
+    hasApiKey: false
+  });
+
+  // Persistent Conversation State with immediate local hydration
+  const [conversations, setConversations] = useState<AiConversation[]>(() => {
+    return getLocalConversations(doctor.uid);
+  });
+  const [activeConversationId, setActiveConvId] = useState<string | null>(() => {
+    return getActiveConversationId(doctor.uid);
+  });
+  const [activeConversation, setActiveConv] = useState<AiConversation | null>(() => {
+    const list = getLocalConversations(doctor.uid);
+    const savedId = getActiveConversationId(doctor.uid);
+    return list.find((c) => c.id === savedId) || list[0] || null;
+  });
+  const [loadingConversations, setLoadingConversations] = useState<boolean>(() => {
+    const list = getLocalConversations(doctor.uid);
+    return list.length === 0;
+  });
+  const [messages, setMessages] = useState<AiAgentMessage[]>(() => {
+    const list = getLocalConversations(doctor.uid);
+    const savedId = getActiveConversationId(doctor.uid);
+    const active = list.find((c) => c.id === savedId) || list[0];
+    return active?.messages || [];
+  });
+  const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
+
+  // Pending Confirmation state for sensitive tools
+  const [pendingConfirmation, setPendingConfirmation] = useState<{
+    toolCall: AiToolCall;
+    onConfirm: () => void;
+    onCancel: () => void;
+  } | null>(null);
+
+  // Autonomous Tasks state
+  const [tasks, setTasks] = useState<AiAutonomousTask[]>([]);
+  const [loadingTasks, setLoadingTasks] = useState(false);
+  const [isNewTaskModalOpen, setIsNewTaskModalOpen] = useState(false);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskDesc, setNewTaskDesc] = useState('');
+  const [newTaskTrigger, setNewTaskTrigger] = useState<'QUEUE_WAIT_TIME_EXCEEDED' | 'OUTSTANDING_BALANCE_EXCEEDED' | 'PATIENT_REGISTERED'>('QUEUE_WAIT_TIME_EXCEEDED');
+  const [newTaskThreshold, setNewTaskThreshold] = useState<number>(30);
+  const [newTaskAction, setNewTaskAction] = useState<'ALERT_STAFF' | 'SEND_REMINDER' | 'FLAG_HIGH_BALANCE'>('ALERT_STAFF');
+
+  // Audit Logs state
+  const [auditLogs, setAuditLogs] = useState<AiAuditLog[]>([]);
+  const [loadingAudit, setLoadingAudit] = useState(false);
+
+  // Expanded tool call steps map
+  const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
+
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // 1. Initial Load: Status & Persistent Conversations
+  useEffect(() => {
+    fetchAiStatus().then(setAiStatus);
+
+    let isMounted = true;
+    async function initChat() {
+      try {
+        const convList = await getClinicAiConversations(doctor.uid);
+        if (!isMounted) return;
+        
+        if (convList.length > 0) {
+          setConversations(convList);
+
+          const savedActiveId = getActiveConversationId(doctor.uid);
+          let selectedConv = convList.find((c) => c.id === savedActiveId);
+
+          if (!selectedConv && convList.length > 0) {
+            selectedConv = convList[0];
+          }
+
+          if (selectedConv) {
+            setActiveConvId(selectedConv.id);
+            setActiveConv(selectedConv);
+            setActiveConversationId(doctor.uid, selectedConv.id);
+            if (selectedConv.messages && selectedConv.messages.length > 0) {
+              setMessages(selectedConv.messages);
+            } else {
+              // Load full conversation if messages were omitted
+              const full = await getAiConversation(doctor.uid, selectedConv.id);
+              if (isMounted && full && full.messages && full.messages.length > 0) {
+                setMessages(full.messages);
+                setActiveConv(full);
+              }
+            }
+          }
+        } else {
+          // If Firestore query returned empty, check local cache first before creating new
+          const localExisting = getLocalConversations(doctor.uid);
+          if (localExisting.length > 0) {
+            const savedActiveId = getActiveConversationId(doctor.uid);
+            const selected = localExisting.find((c) => c.id === savedActiveId) || localExisting[0];
+            setConversations(localExisting);
+            setActiveConvId(selected.id);
+            setActiveConv(selected);
+            setMessages(selected.messages || []);
+          } else {
+            const freshConv = await createAiConversation(
+              doctor.uid,
+              currentMember?.uid || doctor.uid,
+              currentMember?.name || doctor.name
+            );
+            if (!isMounted) return;
+            setConversations([freshConv]);
+            setActiveConvId(freshConv.id);
+            setActiveConv(freshConv);
+            setMessages(freshConv.messages || []);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to initialize AI conversations:', err);
+      } finally {
+        if (isMounted) setLoadingConversations(false);
+      }
+    }
+
+    initChat();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [doctor.uid]);
+
+  // Scroll to bottom on new messages
+  useEffect(() => {
+    if (activeTab === 'chat') {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, activeTab, isProcessing]);
+
+  // Load Tasks / Audit when corresponding tab active
+  useEffect(() => {
+    if (activeTab === 'tasks') {
+      loadTasks();
+    } else if (activeTab === 'audit') {
+      loadAudit();
+    }
+  }, [activeTab, doctor.uid]);
+
+  async function loadTasks() {
+    setLoadingTasks(true);
+    const data = await getClinicAiTasks(doctor.uid);
+    setTasks(data);
+    setLoadingTasks(false);
+  }
+
+  async function loadAudit() {
+    setLoadingAudit(true);
+    const data = await getClinicAiAuditLogs(doctor.uid);
+    setAuditLogs(data);
+    setLoadingAudit(false);
+  }
+
+  // Handle Switching to a different conversation
+  async function handleSelectConversation(convId: string) {
+    if (convId === activeConversationId) {
+      setShowHistoryDrawer(false);
+      return;
+    }
+
+    // Persist current active conversation messages before switching
+    if (activeConversationId && messages.length > 0) {
+      await saveAiMessages(doctor.uid, activeConversationId, messages);
+    }
+
+    setShowHistoryDrawer(false);
+    setActiveConvId(convId);
+    setActiveConversationId(doctor.uid, convId);
+
+    // Look up in current list
+    const found = conversations.find((c) => c.id === convId);
+    if (found && Array.isArray(found.messages) && found.messages.length > 0) {
+      setActiveConv(found);
+      setMessages(found.messages);
+    } else {
+      // Fetch full conversation document
+      const full = await getAiConversation(doctor.uid, convId);
+      if (full) {
+        setActiveConv(full);
+        setMessages(full.messages || []);
+        setConversations((prev) => prev.map((c) => (c.id === convId ? full : c)));
+      }
+    }
+  }
+
+  // Handle Creating a New Conversation
+  async function handleNewConversation() {
+    setShowHistoryDrawer(false);
+    try {
+      const freshConv = await createAiConversation(
+        doctor.uid,
+        currentMember?.uid || doctor.uid,
+        currentMember?.name || doctor.name
+      );
+      setConversations((prev) => [freshConv, ...prev.filter((c) => c.id !== freshConv.id)]);
+      setActiveConvId(freshConv.id);
+      setActiveConv(freshConv);
+      setMessages(freshConv.messages || []);
+      if (onShowToast) onShowToast('تم بدء محادثة جديدة مع الوكيل الذكي', 'info');
+    } catch (err: any) {
+      if (onShowToast) onShowToast(err?.message || 'فشل إنشاء محادثة جديدة', 'error');
+    }
+  }
+
+  // Handle Deleting a Conversation
+  async function handleDeleteConversation(convId: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!confirm('هل تريد حذف هذه المحادثة بشكل نهائي؟')) return;
+
+    try {
+      await deleteAiConversation(doctor.uid, convId);
+      const remaining = conversations.filter((c) => c.id !== convId);
+      setConversations(remaining);
+
+      // If active conversation was deleted, switch to next or create new
+      if (activeConversationId === convId) {
+        if (remaining.length > 0) {
+          handleSelectConversation(remaining[0].id);
+        } else {
+          handleNewConversation();
+        }
+      }
+      if (onShowToast) onShowToast('تم حذف المحادثة', 'info');
+    } catch (err: any) {
+      if (onShowToast) onShowToast(err?.message || 'فشل حذف المحادثة', 'error');
+    }
+  }
+
+  // Handle Send Message & Persist
+  async function handleSendMessage(customPrompt?: string) {
+    const textToSend = customPrompt || inputMessage;
+    if (!textToSend.trim() || isProcessing) return;
+
+    // Ensure we have an active conversation
+    let currentConvId = activeConversationId;
+    if (!currentConvId) {
+      const freshConv = await createAiConversation(
+        doctor.uid,
+        currentMember?.uid || doctor.uid,
+        currentMember?.name || doctor.name
+      );
+      currentConvId = freshConv.id;
+      setActiveConvId(freshConv.id);
+      setActiveConv(freshConv);
+      setConversations((prev) => [freshConv, ...prev]);
+    }
+
+    const userMsg: AiAgentMessage = {
+      id: `msg_u_${Date.now()}`,
+      role: 'user',
+      content: textToSend.trim(),
+      timestamp: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })
+    };
+
+    const messagesWithUser = [...messages, userMsg];
+    setMessages(messagesWithUser);
+    if (!customPrompt) setInputMessage('');
+    setIsProcessing(true);
+
+    // Save user message immediately to storage
+    await saveAiMessages(doctor.uid, currentConvId, messagesWithUser);
+
+    try {
+      const response = await sendAiMessage({
+        clinicId: doctor.uid,
+        messages: messagesWithUser,
+        userMember: currentMember,
+        isDoctorOwner,
+        isSubscriptionActive
+      });
+
+      const assistantMsg: AiAgentMessage = {
+        id: `msg_a_${Date.now()}`,
+        role: 'assistant',
+        content: response.reply,
+        toolCalls: response.toolCalls,
+        toolResults: response.toolResults,
+        status: response.status,
+        timestamp: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })
+      };
+
+      const finalMessages = [...messagesWithUser, assistantMsg];
+      setMessages(finalMessages);
+
+      // Persist assistant message and update conversation metadata
+      await saveAiMessages(doctor.uid, currentConvId, finalMessages);
+      setActiveConv((prev) => (prev ? { ...prev, messages: finalMessages, messageCount: finalMessages.length } : null));
+
+      // Update conversations list state to reflect new title/counts
+      setConversations((prev) =>
+        prev.map((c) => {
+          if (c.id === currentConvId) {
+            let updatedTitle = c.title;
+            if (updatedTitle === 'محادثة جديدة') {
+              updatedTitle = textToSend.trim().slice(0, 36);
+              if (textToSend.trim().length > 36) updatedTitle += '...';
+            }
+            return {
+              ...c,
+              title: updatedTitle,
+              messageCount: finalMessages.length,
+              lastMessagePreview: response.reply.slice(0, 60),
+              updatedAt: new Date().toISOString(),
+              messages: finalMessages
+            };
+          }
+          return c;
+        })
+      );
+
+      // Check if any tool requires confirmation
+      const pendingTool = response.toolCalls?.find(
+        (tc) => tc.status === 'awaiting_confirmation' || (tc.error && tc.error.includes('تأكيداً'))
+      );
+
+      if (pendingTool) {
+        setPendingConfirmation({
+          toolCall: pendingTool,
+          onConfirm: async () => {
+            const confirmedCallId = pendingTool.id;
+            setPendingConfirmation(null);
+            setIsProcessing(true);
+
+            // Execute the confirmed tool
+            const toolResult = await executeDirectTool({
+              clinicId: doctor.uid,
+              toolName: pendingTool.toolName,
+              args: pendingTool.arguments,
+              userMember: currentMember,
+              isDoctorOwner,
+              isSubscriptionActive,
+              confirmedActionId: confirmedCallId
+            });
+
+            // Append confirmation response
+            const confirmMsg: AiAgentMessage = {
+              id: `msg_confirm_${Date.now()}`,
+              role: 'assistant',
+              content: toolResult.status === 'success'
+                ? `تم تنفيذ العملية الحساسة بنجاح: ${toolResult.result?.message || 'تم الإجراء'}`
+                : `تعذر إتمام العملية: ${toolResult.error}`,
+              toolResults: [toolResult],
+              status: toolResult.status === 'success' ? 'done' : 'failed',
+              timestamp: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })
+            };
+
+            const confirmedFull = [...finalMessages, confirmMsg];
+            setMessages(confirmedFull);
+            await saveAiMessages(doctor.uid, currentConvId!, confirmedFull);
+            setActiveConv((prev) => (prev ? { ...prev, messages: confirmedFull, messageCount: confirmedFull.length } : null));
+            setConversations((prev) =>
+              prev.map((c) =>
+                c.id === currentConvId
+                  ? { ...c, messages: confirmedFull, messageCount: confirmedFull.length, updatedAt: new Date().toISOString() }
+                  : c
+              )
+            );
+
+            setIsProcessing(false);
+            if (onShowToast) {
+              onShowToast(
+                toolResult.status === 'success' ? 'تم تنفيذ الإجراء بنجاح' : (toolResult.error || 'فشل الإجراء'),
+                toolResult.status === 'success' ? 'success' : 'error'
+              );
+            }
+          },
+          onCancel: async () => {
+            setPendingConfirmation(null);
+            const cancelMsg: AiAgentMessage = {
+              id: `msg_cancel_${Date.now()}`,
+              role: 'assistant',
+              content: 'تم إلغاء الإجراء الحساس بناءً على طلبك ولم يتم تعديل أي بيانات في العيادة.',
+              timestamp: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })
+            };
+            const cancelledFull = [...finalMessages, cancelMsg];
+            setMessages(cancelledFull);
+            await saveAiMessages(doctor.uid, currentConvId!, cancelledFull);
+            setActiveConv((prev) => (prev ? { ...prev, messages: cancelledFull, messageCount: cancelledFull.length } : null));
+            setConversations((prev) =>
+              prev.map((c) =>
+                c.id === currentConvId
+                  ? { ...c, messages: cancelledFull, messageCount: cancelledFull.length, updatedAt: new Date().toISOString() }
+                  : c
+              )
+            );
+          }
+        });
+      }
+    } catch (err: any) {
+      const errMsg: AiAgentMessage = {
+        id: `msg_err_${Date.now()}`,
+        role: 'assistant',
+        content: `عفواً، واجهت مشكلة أثناء المعالجة: ${err.message || 'خطأ غير متوقع'}.`,
+        status: 'failed',
+        timestamp: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })
+      };
+      const errorFull = [...messagesWithUser, errMsg];
+      setMessages(errorFull);
+      await saveAiMessages(doctor.uid, currentConvId, errorFull);
+      setActiveConv((prev) => (prev ? { ...prev, messages: errorFull, messageCount: errorFull.length } : null));
+    } finally {
+      setIsProcessing(false);
+    }
+  }
+
+  // Handle Toggle Autonomous Task
+  async function handleToggleTask(taskId: string, currentStatus: 'active' | 'paused') {
+    const nextStatus = currentStatus === 'active' ? 'paused' : 'active';
+    try {
+      await toggleClinicAiTaskStatus(doctor.uid, taskId, nextStatus);
+      setTasks((prev) =>
+        prev.map((t) => (t.id === taskId ? { ...t, status: nextStatus } : t))
+      );
+      if (onShowToast) onShowToast(`تم ${nextStatus === 'active' ? 'تفعيل' : 'إيقاف'} القاعدة بنجاح`, 'info');
+    } catch (err: any) {
+      if (onShowToast) onShowToast(err.message || 'فشل تحديث حالة القاعدة', 'error');
+    }
+  }
+
+  // Handle Create Autonomous Task
+  async function handleCreateTask() {
+    if (!newTaskTitle.trim()) return;
+
+    try {
+      await saveClinicAiTask(doctor.uid, {
+        clinicId: doctor.uid,
+        title: newTaskTitle.trim(),
+        description: newTaskDesc.trim() || 'قاعدة آلية مخصصة للعيادة',
+        triggerType: newTaskTrigger === 'PATIENT_REGISTERED' ? 'EVENT' : 'CONDITION',
+        triggerConfig: {
+          event: newTaskTrigger === 'PATIENT_REGISTERED' ? 'PATIENT_REGISTERED' : undefined,
+          condition: newTaskTrigger !== 'PATIENT_REGISTERED' ? newTaskTrigger : undefined,
+          threshold: newTaskThreshold
+        },
+        actionType: newTaskAction,
+        actionConfig: {
+          severity: 'warning',
+          autoExecution: true
+        },
+        status: 'active',
+        createdBy: currentMember?.uid || doctor.uid,
+        createdByName: currentMember?.name || doctor.name
+      });
+
+      setIsNewTaskModalOpen(false);
+      setNewTaskTitle('');
+      setNewTaskDesc('');
+      loadTasks();
+      if (onShowToast) onShowToast('تم إنشاء وتفعيل المهمة الآلية بنجاح', 'success');
+    } catch (e: any) {
+      if (onShowToast) onShowToast(e.message || 'فشل إنشاء المهمة', 'error');
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-3xl border border-slate-200/90 shadow-xl overflow-hidden flex flex-col h-[750px] max-h-[85vh] relative text-right" dir="rtl">
+      {/* Header bar */}
+      <div className="bg-[#122c4a] text-white px-5 py-4 flex items-center justify-between border-b border-slate-700/80 shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-slate-900/90 flex items-center justify-center text-emerald-400 shadow-md border border-slate-700/80">
+            <span className="text-xl leading-none inline-flex items-center justify-center">🤖</span>
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-base sm:text-lg font-black font-['Tajawal',sans-serif] tracking-tight text-white">
+                وكيل دوري الذكي (Dory AI Agent)
+              </h2>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                <span>نشط</span>
+              </span>
+            </div>
+            <p className="text-xs text-slate-300">
+              المساعد التشغيلي الذكي • عيادة: {doctor.clinicName}
+            </p>
+          </div>
+        </div>
+
+        {/* Tab Switcher & Close */}
+        <div className="flex items-center gap-2">
+          <div className="bg-slate-900/80 p-1 rounded-xl flex items-center gap-1 text-xs font-bold border border-slate-700/60">
+            <button
+              onClick={() => setActiveTab('chat')}
+              className={`px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                activeTab === 'chat' ? 'bg-[#1b3a5c] text-white shadow-xs border border-slate-600/50' : 'text-slate-300 hover:text-white'
+              }`}
+            >
+              <span className="text-xs leading-none inline-flex items-center justify-center">💬</span>
+              <span>المحادثة والأوامر</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('tasks')}
+              className={`px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                activeTab === 'tasks' ? 'bg-[#1b3a5c] text-white shadow-xs border border-slate-600/50' : 'text-slate-300 hover:text-white'
+              }`}
+            >
+              <span className="text-xs leading-none inline-flex items-center justify-center">⚡</span>
+              <span>المهام الذاتية ({tasks.length})</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('audit')}
+              className={`px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                activeTab === 'audit' ? 'bg-[#1b3a5c] text-white shadow-xs border border-slate-600/50' : 'text-slate-300 hover:text-white'
+              }`}
+            >
+              <span className="text-xs leading-none inline-flex items-center justify-center">📊</span>
+              <span>سجل التدقيق</span>
+            </button>
+          </div>
+
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="w-8 h-8 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-300 flex items-center justify-center transition cursor-pointer border border-slate-700/60"
+              title="إغلاق"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Subscription Alert if Inactive */}
+      {!isSubscriptionActive && (
+        <div className="bg-amber-500/10 border-b border-amber-200 px-4 py-2 text-xs text-amber-800 font-bold flex items-center gap-2">
+          <span className="text-base leading-none inline-flex items-center justify-center">⚠️</span>
+          <span>تنبيه: اشتراك العيادة غير نشط حالياً. يمكن للوكيل قراءة البيانات فقط دون تعديل أو حجز كشوفات جديدة.</span>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* TAB 1: CHAT & COMMAND EXECUTION */}
+      {/* ============================================================== */}
+      {activeTab === 'chat' && (
+        <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50 relative">
+          
+          {/* Conversation Bar: Current Topic + New Chat + History Drawer Toggle */}
+          <div className="px-4 py-2.5 bg-white border-b border-slate-200/90 flex items-center justify-between gap-3 text-xs shrink-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-sm leading-none inline-flex items-center justify-center text-emerald-600">💬</span>
+              <span className="font-extrabold text-slate-900 truncate max-w-[220px] sm:max-w-md">
+                {activeConversation?.title || 'محادثة جارية'}
+              </span>
+              <span className="text-[11px] text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full font-bold shrink-0">
+                {messages.length} رسائل
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={handleNewConversation}
+                className="px-3 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200/80 rounded-xl font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                title="بدء جلسة محادثة جديدة وحفظ السابقة"
+              >
+                <span className="text-xs leading-none inline-flex items-center justify-center">➕</span>
+                <span>محادثة جديدة</span>
+              </button>
+
+              <button
+                onClick={() => setShowHistoryDrawer(!showHistoryDrawer)}
+                className={`px-3 py-1.5 rounded-xl font-bold border transition flex items-center gap-1.5 cursor-pointer ${
+                  showHistoryDrawer
+                    ? 'bg-[#122c4a] text-white border-[#122c4a]'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
+                }`}
+                title="عرض أرشيف المحادثات السابقة"
+              >
+                <span className="text-xs leading-none inline-flex items-center justify-center">📜</span>
+                <span>المحادثات السابقة ({conversations.length})</span>
+                <ChevronDown className={`w-3 h-3 transition-transform ${showHistoryDrawer ? 'rotate-180' : ''}`} />
+              </button>
+            </div>
+          </div>
+
+          {/* Previous Conversations Dropdown / Drawer Panel */}
+          {showHistoryDrawer && (
+            <div className="absolute top-11 right-0 left-0 z-30 bg-white border-b border-slate-300 shadow-xl p-4 max-h-72 overflow-y-auto animate-in slide-in-from-top-2 duration-200">
+              <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-100">
+                <div className="font-extrabold text-xs text-slate-800 flex items-center gap-1.5">
+                  <span className="text-sm leading-none inline-flex items-center justify-center">🗂️</span>
+                  <span>أرشيف محادثاتك السابقة مع الوكيل الذكي:</span>
+                </div>
+                <button
+                  onClick={() => setShowHistoryDrawer(false)}
+                  className="text-slate-400 hover:text-slate-700 text-xs font-bold cursor-pointer"
+                >
+                  إغلاق ✕
+                </button>
+              </div>
+
+              {conversations.length === 0 ? (
+                <div className="text-center py-6 text-xs text-slate-400">
+                  لا توجد محادثات سابقة بعد.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {conversations.map((conv) => {
+                    const isActive = conv.id === activeConversationId;
+                    return (
+                      <div
+                        key={conv.id}
+                        onClick={() => handleSelectConversation(conv.id)}
+                        className={`p-3 rounded-2xl border text-right cursor-pointer transition flex items-start justify-between gap-3 ${
+                          isActive
+                            ? 'bg-sky-50/80 border-sky-300 shadow-xs ring-1 ring-sky-200'
+                            : 'bg-slate-50/60 hover:bg-slate-100/80 border-slate-200'
+                        }`}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <span className="font-bold text-xs text-slate-900 truncate">
+                              {conv.title}
+                            </span>
+                            {isActive && (
+                              <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 text-[9px] font-bold rounded-md shrink-0">
+                                الحالية
+                              </span>
+                            )}
+                          </div>
+                          {conv.lastMessagePreview && (
+                            <p className="text-[11px] text-slate-500 truncate">
+                              {conv.lastMessagePreview}
+                            </p>
+                          )}
+                          <div className="flex items-center gap-2 mt-1.5 text-[10px] text-slate-400">
+                            <span>{new Date(conv.updatedAt).toLocaleDateString('ar-EG', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                            <span>•</span>
+                            <span>{conv.messageCount} رسائل</span>
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={(e) => handleDeleteConversation(conv.id, e)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer shrink-0"
+                          title="حذف المحادثة"
+                        >
+                          <span className="text-xs leading-none inline-flex items-center justify-center">🗑️</span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Quick Action Chips */}
+          <div className="p-2.5 bg-white border-b border-slate-100 flex items-center gap-2 overflow-x-auto scrollbar-none shrink-0">
+            <span className="text-[11px] text-slate-400 font-bold shrink-0">أوامر سريعة:</span>
+            {[
+              { label: '📢 نادِ المريض التالي', prompt: 'نادِ على المريض التالي في طابور الانتظار' },
+              { label: '👥 مين في الطابور دلوقتي؟', prompt: 'استعرض طابور اليوم وحالات المرضى' },
+              { label: '💰 ملخص إيرادات اليوم', prompt: 'اعملي كشف حساب وملخص مالي لليوم' },
+              { label: '📅 مواعيد إعادة الكشف', prompt: 'استعرض مواعيد إعادة الكشف القادمة' },
+              { label: '⏱️ نبهني لو زاد الانتظار عن 30 دقيقة', prompt: 'نبهني لو وقت الانتظار في العيادة زاد عن 30 دقيقة' }
+            ].map((chip, idx) => (
+              <button
+                key={idx}
+                disabled={isProcessing}
+                onClick={() => handleSendMessage(chip.prompt)}
+                className="shrink-0 text-xs px-3 py-1 rounded-full bg-slate-100 hover:bg-sky-50 hover:text-sky-700 text-slate-700 font-medium border border-slate-200/70 transition cursor-pointer whitespace-nowrap disabled:opacity-50"
+              >
+                {chip.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Messages Scroll Area */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {loadingConversations ? (
+              <div className="py-20 text-center text-slate-400 flex flex-col items-center justify-center gap-2">
+                <RefreshCw className="w-6 h-6 animate-spin text-sky-600" />
+                <span className="text-xs font-bold">جاري استرجاع محادثاتك وسجلات الأوامر...</span>
+              </div>
+            ) : messages.length === 0 ? (
+              <div className="py-16 text-center text-slate-400 text-xs font-medium">
+                لا توجد رسائل في هذه المحادثة حتى الآن. ابدأ بكتابة استفسار أو أمر تشغيلي.
+              </div>
+            ) : (
+              messages.map((msg) => (
+                <div
+                  key={msg.id}
+                  className={`flex gap-3 max-w-[85%] ${
+                    msg.role === 'user' ? 'mr-auto flex-row-reverse' : 'ml-auto'
+                  }`}
+                >
+                  <div
+                    className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                      msg.role === 'user'
+                        ? 'bg-slate-900 text-white'
+                        : 'bg-[#122c4a] text-emerald-400 border border-slate-700 shadow-xs'
+                    }`}
+                  >
+                    {msg.role === 'user' ? (
+                      <span className="text-base leading-none inline-flex items-center justify-center">👤</span>
+                    ) : (
+                      <span className="text-base leading-none inline-flex items-center justify-center">🤖</span>
+                    )}
+                  </div>
+
+                  <div
+                    className={`rounded-2xl p-4 shadow-2xs border ${
+                      msg.role === 'user'
+                        ? 'bg-[#122c4a] text-white border-[#122c4a]'
+                        : 'bg-white text-slate-800 border-slate-200/90'
+                    }`}
+                  >
+                    {/* Tool Execution Details Badge */}
+                    {msg.toolCalls && msg.toolCalls.length > 0 && (
+                      <div className="mb-3 space-y-2">
+                        {msg.toolCalls.map((tc, idx) => {
+                          const isExpanded = expandedSteps[tc.id || String(idx)];
+                          return (
+                            <div
+                              key={idx}
+                              className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-700"
+                            >
+                              <div
+                                onClick={() =>
+                                  setExpandedSteps((prev) => ({
+                                    ...prev,
+                                    [tc.id || String(idx)]: !isExpanded
+                                  }))
+                                }
+                                className="flex items-center justify-between cursor-pointer font-bold select-none"
+                              >
+                                <div className="flex items-center gap-1.5">
+                                  <Terminal className="w-3.5 h-3.5 text-sky-600" />
+                                  <span>استدعاء أداة: {tc.toolName}</span>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  {tc.status === 'success' && (
+                                    <span className="text-emerald-600 flex items-center gap-1 font-bold">
+                                      <span className="text-xs leading-none inline-flex items-center justify-center">✅</span>
+                                      <span>ناجح</span>
+                                    </span>
+                                  )}
+                                  {tc.status === 'failed' && (
+                                    <span className="text-rose-600 flex items-center gap-1 font-bold">
+                                      <span className="text-xs leading-none inline-flex items-center justify-center">❌</span>
+                                      <span>فشل</span>
+                                    </span>
+                                  )}
+                                  {tc.status === 'denied' && (
+                                    <span className="text-amber-600 flex items-center gap-1 font-bold">
+                                      <span className="text-xs leading-none inline-flex items-center justify-center">⚠️</span>
+                                      <span>مرفوض</span>
+                                    </span>
+                                  )}
+                                  {isExpanded ? (
+                                    <ChevronUp className="w-3.5 h-3.5" />
+                                  ) : (
+                                    <ChevronDown className="w-3.5 h-3.5" />
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Collapsible Tool Arguments & Result */}
+                              {isExpanded && (
+                                <div className="mt-2 pt-2 border-t border-slate-200 space-y-1 font-mono text-[11px] text-slate-600">
+                                  <div>
+                                    <span className="font-bold text-slate-800">المعطيات:</span>{' '}
+                                    {JSON.stringify(tc.arguments)}
+                                  </div>
+                                  {tc.result && (
+                                    <div className="text-emerald-700 bg-emerald-50 p-1.5 rounded">
+                                      <span className="font-bold">النتيجة:</span>{' '}
+                                      {typeof tc.result === 'object'
+                                        ? JSON.stringify(tc.result, null, 1)
+                                        : String(tc.result)}
+                                    </div>
+                                  )}
+                                  {tc.error && (
+                                    <div className="text-rose-700 bg-rose-50 p-1.5 rounded">
+                                      <span className="font-bold">السبب:</span> {tc.error}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Main Message Text */}
+                    <div className="text-sm leading-relaxed whitespace-pre-wrap font-sans">
+                      {msg.content}
+                    </div>
+
+                    <div
+                      className={`text-[10px] mt-2 flex items-center justify-end gap-1 ${
+                        msg.role === 'user' ? 'text-slate-300' : 'text-slate-400'
+                      }`}
+                    >
+                      <span>{msg.timestamp}</span>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+
+            {/* Processing Indicator */}
+            {isProcessing && (
+              <div className="flex gap-3 max-w-[80%] ml-auto">
+                <div className="w-8 h-8 rounded-xl bg-[#122c4a] text-emerald-400 border border-slate-700 flex items-center justify-center animate-pulse">
+                  <span className="text-base leading-none inline-flex items-center justify-center">🤖</span>
+                </div>
+                <div className="bg-white rounded-2xl p-3.5 border border-slate-200/90 shadow-2xs flex items-center gap-2 text-xs text-slate-600 font-bold">
+                  <RefreshCw className="w-4 h-4 animate-spin text-sky-600" />
+                  <span>الوكيل يفكر ويستعلم عن أدوات العيادة...</span>
+                </div>
+              </div>
+            )}
+
+            <div ref={chatEndRef} />
+          </div>
+
+          {/* Sensitive Action Confirmation Modal */}
+          {pendingConfirmation && (
+            <div className="p-4 bg-amber-50 border-t border-amber-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-amber-950">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                  <span className="text-xl leading-none inline-flex items-center justify-center">⚠️</span>
+                </div>
+                <div>
+                  <div className="font-bold text-xs">تأكيد عملية حساسة في النظام</div>
+                  <div className="text-xs text-amber-800">
+                    العملية: <span className="font-mono font-bold">{pendingConfirmation.toolCall.toolName}</span>{' '}
+                    بالمعطيات: {JSON.stringify(pendingConfirmation.toolCall.arguments)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={pendingConfirmation.onConfirm}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition cursor-pointer"
+                >
+                  تأكيد وتنفيذ
+                </button>
+                <button
+                  onClick={pendingConfirmation.onCancel}
+                  className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Input Box */}
+          <div className="p-3 bg-white border-t border-slate-200/80">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSendMessage();
+              }}
+              className="flex items-center gap-2"
+            >
+              <input
+                type="text"
+                value={inputMessage}
+                disabled={isProcessing}
+                onChange={(e) => setInputMessage(e.target.value)}
+                placeholder="اكتب أمراً أو استفساراً للوكيل الذكي (مثال: نادِ على المريض التالي، أو احجز كشف جديد)..."
+                className="flex-1 bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition disabled:opacity-50"
+              />
+              <button
+                type="submit"
+                disabled={!inputMessage.trim() || isProcessing}
+                className="px-5 py-3 bg-[#122c4a] hover:bg-[#0f243c] text-white rounded-2xl font-bold text-xs transition cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shrink-0 shadow-xs"
+              >
+                <span>إرسال</span>
+                <Send className="w-3.5 h-3.5" />
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* TAB 2: AUTONOMOUS TASKS & TRIGGERS */}
+      {/* ============================================================== */}
+      {activeTab === 'tasks' && (
+        <div className="flex-1 p-5 overflow-y-auto bg-slate-50 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-black text-slate-900 font-['Tajawal',sans-serif]">
+                المهام الذاتية والقواعد الآلية (Autonomous Tasks)
+              </h3>
+              <p className="text-xs text-slate-500">
+                قواعد ذكية ينفذها الوكيل تلقائياً في الخلفية عند حدوث شروط محددة بالعيادة
+              </p>
+            </div>
+            <button
+              onClick={() => setIsNewTaskModalOpen(true)}
+              className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+            >
+              <Plus className="w-4 h-4" />
+              <span>إضافة قاعدة جديدة</span>
+            </button>
+          </div>
+
+          {loadingTasks ? (
+            <div className="py-12 text-center text-slate-400 flex items-center justify-center gap-2">
+              <RefreshCw className="w-5 h-5 animate-spin" />
+              <span>جاري تحميل المهام...</span>
+            </div>
+          ) : tasks.length === 0 ? (
+            <div className="bg-white rounded-2xl p-8 text-center border border-slate-200">
+              <div className="w-12 h-12 rounded-2xl bg-sky-50 text-sky-600 flex items-center justify-center mx-auto mb-3">
+                <span className="text-2xl leading-none inline-flex items-center justify-center">⚡</span>
+              </div>
+              <h4 className="font-bold text-slate-800 text-sm mb-1">لا توجد قواعد آلية نشطة</h4>
+              <p className="text-xs text-slate-500 mb-4 max-w-sm mx-auto">
+                يمكنك إنشاء قواعد لمراقبة وقت الانتظار أو تنبيه الفريق أو إدارة الطابور تلقائياً.
+              </p>
+              <button
+                onClick={() => setIsNewTaskModalOpen(true)}
+                className="px-4 py-2 bg-sky-600 text-white rounded-xl text-xs font-bold transition cursor-pointer"
+              >
+                إنشاء أول مهمة ذاتية
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {tasks.map((task) => (
+                <div
+                  key={task.id}
+                  className={`bg-white rounded-2xl p-4 border transition ${
+                    task.status === 'active'
+                      ? 'border-emerald-200 shadow-2xs'
+                      : 'border-slate-200 opacity-75'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <div>
+                      <div className="font-bold text-slate-900 text-sm font-['Tajawal',sans-serif] flex items-center gap-2">
+                        <span>{task.title}</span>
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            task.status === 'active'
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              : 'bg-slate-100 text-slate-600'
+                          }`}
+                        >
+                          {task.status === 'active' ? 'نشطة' : 'متوقفة'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                        {task.description}
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={() => handleToggleTask(task.id, task.status as any)}
+                      className={`p-2 rounded-xl transition cursor-pointer ${
+                        task.status === 'active'
+                          ? 'bg-amber-50 hover:bg-amber-100 text-amber-700'
+                          : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700'
+                      }`}
+                      title={task.status === 'active' ? 'إيقاف مؤقت' : 'تفعيل'}
+                    >
+                      {task.status === 'active' ? (
+                        <Pause className="w-4 h-4" />
+                      ) : (
+                        <Play className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
+
+                  <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
+                    <div>
+                      المشغل: <span className="font-bold">{task.triggerConfig?.condition || task.triggerConfig?.event || task.triggerType}</span>
+                    </div>
+                    <div>
+                      عدد مرات التنفيذ: <span className="font-bold text-slate-800">{task.executionCount || 0}</span>
+                    </div>
+                  </div>
+
+                  {task.lastExecutionLog && (
+                    <div className="mt-2 text-[10px] bg-slate-50 text-slate-600 p-2 rounded-lg font-mono">
+                      آخر تنفيذ: {task.lastExecutionLog}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* New Task Creation Modal */}
+          {isNewTaskModalOpen && (
+            <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-3xl p-6 w-full max-w-md border border-slate-200 shadow-2xl text-right">
+                <h4 className="text-base font-bold text-slate-900 mb-4 font-['Tajawal',sans-serif]">
+                  إضافة قاعدة آلية ذكية جديدة
+                </h4>
+
+                <div className="space-y-3 text-xs">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">عنوان القاعدة:</label>
+                    <input
+                      type="text"
+                      value={newTaskTitle}
+                      onChange={(e) => setNewTaskTitle(e.target.value)}
+                      placeholder="مثال: تنبيه عند انتظار المريض أكثر من 30 دقيقة"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-sky-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">وصف المهمة:</label>
+                    <textarea
+                      value={newTaskDesc}
+                      onChange={(e) => setNewTaskDesc(e.target.value)}
+                      placeholder="تفاصيل ما ستقوم به المهمة..."
+                      rows={2}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-sky-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">شرط المشغل (Trigger):</label>
+                    <select
+                      value={newTaskTrigger}
+                      onChange={(e) => setNewTaskTrigger(e.target.value as any)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-sky-500"
+                    >
+                      <option value="QUEUE_WAIT_TIME_EXCEEDED">تجاوز وقت الانتظار بالعيادة</option>
+                      <option value="OUTSTANDING_BALANCE_EXCEEDED">تجاوز المتبقي المالي حداً معيناً</option>
+                      <option value="PATIENT_REGISTERED">عند حجز مريض جديد في الطابور</option>
+                    </select>
+                  </div>
+
+                  {newTaskTrigger !== 'PATIENT_REGISTERED' && (
+                    <div>
+                      <label className="font-bold text-slate-700 block mb-1">
+                        {newTaskTrigger === 'QUEUE_WAIT_TIME_EXCEEDED' ? 'الحد الأقصى بالدقائق:' : 'الحد المالي (ج):'}
+                      </label>
+                      <input
+                        type="number"
+                        value={newTaskThreshold}
+                        onChange={(e) => setNewTaskThreshold(Number(e.target.value))}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-sky-500"
+                      />
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">الإجراء التلقائي:</label>
+                    <select
+                      value={newTaskAction}
+                      onChange={(e) => setNewTaskAction(e.target.value as any)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-sky-500"
+                    >
+                      <option value="ALERT_STAFF">إرسال تنبيه لفريق العمل</option>
+                      <option value="FLAG_HIGH_BALANCE">إشارة تدقيق مالي على ملف المريض</option>
+                      <option value="SEND_REMINDER">تجهيز رسالة تذكير للمريض</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="mt-5 flex items-center justify-end gap-2">
+                  <button
+                    onClick={() => setIsNewTaskModalOpen(false)}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
+                  >
+                    إلغاء
+                  </button>
+                  <button
+                    onClick={handleCreateTask}
+                    disabled={!newTaskTitle.trim()}
+                    className="px-5 py-2 bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold rounded-xl transition cursor-pointer disabled:opacity-50"
+                  >
+                    حفظ وتفعيل
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* TAB 3: AUDIT TRAIL & LOGS */}
+      {/* ============================================================== */}
+      {activeTab === 'audit' && (
+        <div className="flex-1 p-5 overflow-y-auto bg-slate-50 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-black text-slate-900 font-['Tajawal',sans-serif]">
+                سجل تدقيق الذكاء الاصطناعي (AI Audit Trail)
+              </h3>
+              <p className="text-xs text-slate-500">
+                تسجيل رقابي كامل وغير قابل للتعديل لكافة استدعاءات الأدوات وتفويضات المستخدمين
+              </p>
+            </div>
+            <button
+              onClick={loadAudit}
+              className="px-3 py-1.5 bg-white border border-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer hover:bg-slate-50"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>تحديث</span>
+            </button>
+          </div>
+
+          {loadingAudit ? (
+            <div className="py-12 text-center text-slate-400 flex items-center justify-center gap-2">
+              <RefreshCw className="w-5 h-5 animate-spin" />
+              <span>جاري تحميل سجل التدقيق...</span>
+            </div>
+          ) : auditLogs.length === 0 ? (
+            <div className="bg-white rounded-2xl p-8 text-center border border-slate-200 text-slate-500 text-xs">
+              لا توجد عمليات مسجلة في سجل التدقيق حتى الآن.
+            </div>
+          ) : (
+            <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
+              <table className="w-full text-right text-xs">
+                <thead className="bg-slate-100 text-slate-600 font-bold border-b border-slate-200">
+                  <tr>
+                    <th className="p-3">الوقت</th>
+                    <th className="p-3">العملية / الأداة</th>
+                    <th className="p-3">المستخدم / الفاعل</th>
+                    <th className="p-3">الحالة</th>
+                    <th className="p-3">التفاصيل / السبب</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-sans">
+                  {auditLogs.map((log) => (
+                    <tr key={log.id} className="hover:bg-slate-50/50">
+                      <td className="p-3 text-[11px] text-slate-400 whitespace-nowrap">
+                        {new Date(log.timestamp).toLocaleTimeString('ar-EG', {
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </td>
+                      <td className="p-3 font-mono font-bold text-slate-800 text-[11px]">
+                        {log.toolName}
+                      </td>
+                      <td className="p-3 text-slate-700">
+                        {log.actorName} ({log.actorRole})
+                      </td>
+                      <td className="p-3">
+                        {log.status === 'success' && (
+                          <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full font-bold text-[10px]">
+                            ناجح
+                          </span>
+                        )}
+                        {log.status === 'failed' && (
+                          <span className="px-2 py-0.5 bg-rose-50 text-rose-700 rounded-full font-bold text-[10px]">
+                            فشل
+                          </span>
+                        )}
+                        {log.status === 'denied' && (
+                          <span className="px-2 py-0.5 bg-amber-50 text-amber-700 rounded-full font-bold text-[10px]">
+                            مرفوض
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-3 text-[11px] text-slate-600 max-w-xs truncate">
+                        {log.reason || (log.outputResult ? JSON.stringify(log.outputResult) : 'تم بنجاح')}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};

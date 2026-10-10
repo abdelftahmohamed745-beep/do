@@ -1,0 +1,357 @@
+{
+  "entities": {
+    "doctors": {
+      "title": "doctors",
+      "description": "Doctor profile and clinic settings",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "specialty": { "type": "string" },
+        "clinicName": { "type": "string" },
+        "qrCodeId": { "type": "string" },
+        "subscriptionStatus": { "type": "string" },
+        "trialEndDate": { "type": "string" },
+        "subscriptionEndDate": { "type": "string" },
+        "subscriptionExpiresAt": { "type": "string" },
+        "isLifetime": { "type": "boolean" },
+        "subscriptionDurationType": { "type": "string" },
+        "subscriptionDurationValue": { "type": "number" },
+        "subscriptionStartedAt": { "type": "string" },
+        "subscriptionLastModified": { "type": "string" },
+        "subscriptionModifiedBy": { "type": "string" },
+        "subscriptionNotes": { "type": "string" },
+        "avgConsultTime": { "type": "number" },
+        "workHours": {
+          "type": "object",
+          "properties": {
+            "open": { "type": "string" },
+            "close": { "type": "string" },
+            "maxPatientsPerDay": { "type": "number" }
+          }
+        },
+        "phone": { "type": "string" },
+        "address": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "name", "specialty"]
+    },
+    "dailyCounters": {
+      "title": "dailyCounters",
+      "description": "Daily ticket counter for queue number generation",
+      "type": "object",
+      "properties": {
+        "lastSequenceNumber": { "type": "number" },
+        "date": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["lastSequenceNumber", "date"]
+    },
+    "clinicMembers": {
+      "title": "clinicMembers",
+      "description": "Clinic members and team roles",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "uid": { "type": "string" },
+        "organizationId": { "type": "string" },
+        "role": { "type": "string", "enum": ["OWNER", "DOCTOR", "SECRETARY", "STAFF"] },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "disabled", "invited"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "invitedBy": { "type": "string" }
+      },
+      "required": ["uid", "organizationId", "role", "email", "status"]
+    },
+    "auditLogs": {
+      "title": "auditLogs",
+      "description": "Audit trail for sensitive clinic organization actions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "organizationId": { "type": "string" },
+        "actorUid": { "type": "string" },
+        "action": { "type": "string" },
+        "targetUid": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["organizationId", "actorUid", "action", "timestamp"]
+    },
+    "patients": {
+      "title": "queues/{doctorId}/patients",
+      "description": "Patients in queue for a doctor",
+      "type": "object",
+      "properties": {
+        "sequenceNumber": { "type": "number" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "status": { "type": "string" },
+        "date": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "calledAt": { "type": "string" },
+        "doneAt": { "type": "string" }
+      },
+      "required": ["sequenceNumber", "name", "phone", "status"]
+    },
+    "ratings": {
+      "title": "ratings",
+      "description": "Patient ratings and reviews for doctors",
+      "type": "object",
+      "properties": {
+        "doctorId": { "type": "string" },
+        "patientRecordId": { "type": "string" },
+        "patientName": { "type": "string" },
+        "patientPhone": { "type": "string" },
+        "stars": { "type": "number" },
+        "comment": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["doctorId", "patientRecordId", "stars"]
+    },
+    "followUpAppointments": {
+      "title": "followUpAppointments",
+      "description": "Follow up appointments for patients with doctors",
+      "type": "object",
+      "properties": {
+        "patientName": { "type": "string" },
+        "patientPhone": { "type": "string" },
+        "doctorId": { "type": "string" },
+        "clinicId": { "type": "string" },
+        "appointmentDate": { "type": "string" },
+        "appointmentTime": { "type": "string" },
+        "appointmentStatus": { "type": "string" },
+        "notes": { "type": "string" },
+        "reason": { "type": "string" },
+        "reminderSettings": { "type": "object" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["patientName", "patientPhone", "doctorId", "appointmentDate", "appointmentTime", "appointmentStatus"]
+    },
+    "dailySessions": {
+      "title": "dailySessions",
+      "description": "Daily clinic operating session, tracking current day state and archives",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "doctorId": { "type": "string" },
+        "date": { "type": "string" },
+        "status": { "type": "string" },
+        "startedAt": { "type": "string" },
+        "completedAt": { "type": "string" },
+        "patientsCount": { "type": "number" },
+        "waitingCount": { "type": "number" },
+        "inConsultationCount": { "type": "number" },
+        "completedCount": { "type": "number" },
+        "followUpsCount": { "type": "number" },
+        "noShowCount": { "type": "number" },
+        "totalRevenue": { "type": "number" },
+        "totalCollected": { "type": "number" },
+        "outstandingCollected": { "type": "number" },
+        "outstandingBalance": { "type": "number" }
+      },
+      "required": ["doctorId", "date", "status"]
+    },
+    "patientFiles": {
+      "title": "patientFiles",
+      "description": "Patient medical record file for clinic doctor",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "doctorId": { "type": "string" },
+        "patientName": { "type": "string" },
+        "patientPhone": { "type": "string" },
+        "visitsCount": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["doctorId", "patientName", "patientPhone"]
+    },
+    "labs": {
+      "title": "labs",
+      "description": "Medical laboratory profiles",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "responsibleName": { "type": "string" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" },
+        "accountType": { "type": "string" },
+        "offersHomeCollection": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "name", "phone", "address"]
+    },
+    "labCatalog": {
+      "title": "labCatalog",
+      "description": "Laboratory test catalog items",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "labId": { "type": "string" },
+        "name": { "type": "string" },
+        "price": { "type": "number" },
+        "sampleType": { "type": "string" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["labId", "name", "price"]
+    },
+    "labOrders": {
+      "title": "labOrders",
+      "description": "Patient lab test orders",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "labId": { "type": "string" },
+        "orderNumber": { "type": "string" },
+        "patientName": { "type": "string" },
+        "patientPhone": { "type": "string" },
+        "status": { "type": "string" },
+        "totalPrice": { "type": "number" }
+      },
+      "required": ["labId", "orderNumber", "patientName", "patientPhone", "status"]
+    },
+    "labSamples": {
+      "title": "labSamples",
+      "description": "Laboratory sample barcodes and tracking",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sampleId": { "type": "string" },
+        "labId": { "type": "string" },
+        "orderId": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["labId", "orderId", "sampleId", "status"]
+    },
+    "labResults": {
+      "title": "labResults",
+      "description": "Test result parameters and approvals",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "labId": { "type": "string" },
+        "orderId": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["labId", "orderId", "status"]
+    },
+    "prescriptions": {
+      "title": "prescriptions",
+      "description": "Paper photo and electronic prescriptions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "patientId": { "type": "string" },
+        "doctorId": { "type": "string" },
+        "date": { "type": "string" },
+        "type": { "type": "string" },
+        "photoBase64": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["patientId", "doctorId", "date", "type"]
+    },
+    "prescriptionTemplates": {
+      "title": "prescriptionTemplates",
+      "description": "Doctor reusable prescription templates",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "doctorId": { "type": "string" },
+        "title": { "type": "string" },
+        "category": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["doctorId", "title"]
+    },
+    "aiConversations": {
+      "title": "aiConversations",
+      "description": "Doctor and clinic staff persistent AI chat conversations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "clinicId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "title": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "messageCount": { "type": "number" },
+        "lastMessagePreview": { "type": "string" },
+        "messages": { "type": "array" }
+      },
+      "required": ["clinicId", "userId", "title"]
+    }
+  },
+  "firestore": {
+    "doctors/{doctorId}/aiConversations/{conversationId}": {
+      "schema": "aiConversations",
+      "description": "Doctor and clinic staff persistent AI conversations and message history"
+    },
+    "doctors/{doctorId}/templates/{templateId}": {
+      "schema": "prescriptionTemplates",
+      "description": "Doctor prescription templates"
+    },
+    "patients/{patientId}/prescriptions/{prescriptionId}": {
+      "schema": "prescriptions",
+      "description": "Patient paper and electronic prescriptions"
+    },
+    "doctors/{doctorId}": {
+      "schema": "doctors",
+      "description": "Doctors collection"
+    },
+    "doctors/{doctorId}/patientFiles/{fileId}": {
+      "schema": "patientFiles",
+      "description": "Doctor patient medical records"
+    },
+    "doctors/{doctorId}/dailySessions/{sessionId}": {
+      "schema": "dailySessions",
+      "description": "Daily clinic operating sessions and archives"
+    },
+    "queues/{doctorId}/dailyCounters/{dateId}": {
+      "schema": "dailyCounters",
+      "description": "Daily queue sequence counter for atomic booking"
+    },
+    "queues/{doctorId}/patients/{patientId}": {
+      "schema": "patients",
+      "description": "Patient tickets queue"
+    },
+    "ratings/{ratingId}": {
+      "schema": "ratings",
+      "description": "Patient doctor ratings and reviews"
+    },
+    "followUpAppointments/{appointmentId}": {
+      "schema": "followUpAppointments",
+      "description": "Patient follow-up appointments"
+    },
+    "clinic_members/{memberId}": {
+      "schema": "clinicMembers",
+      "description": "Clinic members and staff"
+    },
+    "organizations/{organizationId}/audit_logs/{logId}": {
+      "schema": "auditLogs",
+      "description": "Organization membership audit trail"
+    },
+    "labs/{labId}": {
+      "schema": "labs",
+      "description": "Medical laboratories collection"
+    },
+    "labs/{labId}/catalog/{testId}": {
+      "schema": "labCatalog",
+      "description": "Laboratory test catalog"
+    },
+    "labs/{labId}/orders/{orderId}": {
+      "schema": "labOrders",
+      "description": "Laboratory patient orders"
+    },
+    "labs/{labId}/samples/{sampleId}": {
+      "schema": "labSamples",
+      "description": "Laboratory test samples"
+    },
+    "labs/{labId}/results/{resultId}": {
+      "schema": "labResults",
+      "description": "Laboratory test results"
+    }
+  }
+}

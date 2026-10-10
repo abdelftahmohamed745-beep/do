@@ -1,0 +1,30 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isImageUpload() {
+      return request.resource.contentType.matches('image/(jpeg|png|jpg|webp)')
+        && request.resource.size < 5 * 1024 * 1024; // 5MB limit
+    }
+
+    // Doctor profile & clinic photos storage
+    match /doctors/{doctorId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if (isOwner(doctorId) || request.auth.token.admin == true) && isImageUpload();
+      allow delete: if isOwner(doctorId) || request.auth.token.admin == true;
+    }
+
+    // Deny all other unhandled storage accesses
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

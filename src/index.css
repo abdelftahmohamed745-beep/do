@@ -1,0 +1,130 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    /* Brand Foundation: Deep Teal & Muted Turquoise */
+    --color-teal-950: #042f2e;
+    --color-teal-900: #084d49;
+    --color-teal-850: #0a5652;
+    --color-teal-800: #0d5c58;
+    --color-teal-700: #0f766e;
+    --color-teal-600: #0d9488;
+    --color-teal-500: #14b8a6;
+    --color-teal-400: #2dd4bf;
+    --color-teal-100: #ccfbf1;
+    --color-teal-50: #f0fdfa;
+
+    /* Dark Navy & Slate Text */
+    --color-navy-950: #09131f;
+    --color-navy-900: #0f172a;
+    --color-navy-800: #1e293b;
+    --color-navy-700: #334155;
+    --color-navy-600: #475569;
+    --color-navy-500: #64748b;
+
+    /* Light Neutral Surfaces */
+    --color-canvas-bg: #f8fafc;
+    --color-surface-card: #ffffff;
+    --color-surface-muted: #f1f5f9;
+    --color-border-subtle: #e2e8f0;
+    --color-border-strong: #cbd5e1;
+
+    /* Semantic Status Accents */
+    --color-status-waiting: #d97706;
+    --color-status-called: #059669;
+    --color-status-done: #475569;
+    --color-status-cancelled: #e11d48;
+
+    /* Legacy compatibility mappings */
+    --bg-velvet-white: #f8fafc;
+    --card-velvet-white: #ffffff;
+    --border-velvet: #e2e8f0;
+    --velvet-blue-900: #0d5c58;
+    --velvet-blue-800: #084d49;
+    --velvet-green-900: #0d5c58;
+    --velvet-green-800: #0f766e;
+  }
+
+  body {
+    background-color: var(--color-canvas-bg);
+    color: var(--color-navy-900);
+    font-family: 'Cairo', 'Tajawal', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Custom Clean Scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+  }
+}
+
+/* Custom Healthcare Utility Classes */
+.bg-canvas-bg {
+  background-color: #f8fafc;
+}
+
+.bg-surface-card {
+  background-color: #ffffff;
+}
+
+.bg-surface-muted {
+  background-color: #f1f5f9;
+}
+
+.border-subtle {
+  border-color: #e2e8f0;
+}
+
+.text-navy-900 {
+  color: #0f172a;
+}
+
+.text-navy-800 {
+  color: #1e293b;
+}
+
+.text-navy-600 {
+  color: #475569;
+}
+
+.bg-brand-teal {
+  background-color: #0d5c58;
+}
+
+.bg-brand-teal:hover {
+  background-color: #084d49;
+}
+
+.text-brand-teal {
+  color: #0d5c58;
+}
+
+.border-brand-teal {
+  border-color: #0d5c58;
+}
+
+/* Print Specific Optimizations */
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
+
+

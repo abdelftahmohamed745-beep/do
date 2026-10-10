@@ -1,0 +1,6 @@
+{
+  "name": "دوري",
+  "description": "دوري - نظام تشغيل وإدارة العيادات الطبية المستقلة (Clinic OS) للأطباء وفريق العمل",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

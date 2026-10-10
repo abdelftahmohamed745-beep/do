@@ -1,0 +1,15 @@
+User-agent: *
+Allow: /
+Allow: /about
+Allow: /for-clinics
+Allow: /for-labs
+Allow: /for-patients
+Allow: /faq
+Allow: /privacy
+Allow: /clinic/
+Allow: /lab/
+Disallow: /admin
+Disallow: /dashboard
+Disallow: /lab-dashboard
+
+Sitemap: https://dory-system.vercel.app/sitemap.xml
