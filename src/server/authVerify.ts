@@ -1,4 +1,4 @@
-import { db } from '../firebase/config';
+import { db } from '../firebase/config.ts';
 import { doc, getDoc } from 'firebase/firestore';
 
 export interface VerifiedAuthUser {

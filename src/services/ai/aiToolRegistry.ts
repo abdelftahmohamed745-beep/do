@@ -1,5 +1,5 @@
 import { FunctionDeclaration, Type } from "@google/genai";
-import { AiToolDefinition, AiToolName } from "../../types/aiAgent";
+import { AiToolDefinition, AiToolName } from "../../types/aiAgent.ts";
 
 export const AI_TOOL_DEFINITIONS: Record<AiToolName, AiToolDefinition> = {
   // ==========================================
@@ -467,7 +467,7 @@ export const AI_TOOL_DEFINITIONS: Record<AiToolName, AiToolDefinition> = {
     name: 'add_patient_consultation_note',
     category: 'WRITE',
     requiredPermission: 'CREATE_PATIENT',
-    descriptionAr: 'تسجيل وتوثيق زيارة كشف طبي للمريض مع التشخيص، الشكوى، وخطة العلاج أو الروشتة في ملفه الطبي الدائم',
+    descriptionAr: 'تسجيل وتوثيق زيارة كشف طبي ل��مريض مع التشخيص، الشكوى، وخطة العلاج أو الروشتة في ملفه الطبي الدائم',
     descriptionEn: 'Add clinical consultation entry with diagnosis, complaints, and prescription to patient medical file',
     parameters: {
       patientPhoneOrName: {
