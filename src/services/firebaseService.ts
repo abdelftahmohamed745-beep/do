@@ -16,7 +16,7 @@ import {
   increment,
   writeBatch
 } from "firebase/firestore";
-import { db } from "../firebase/config";
+import { db } from "../firebase/config.ts";
 import {
   DoctorProfile,
   PatientRecord,
@@ -59,9 +59,9 @@ import {
   PatientVitals,
   PrescriptionMedicineItem,
   GrowthRecord
-} from "../types";
-import { hasPermission } from "../utils/permissions";
-import { calculateExpirationDate } from "../utils/subscriptionUtils";
+} from "../types.ts";
+import { hasPermission } from "../utils/permissions.ts";
+import { calculateExpirationDate } from "../utils/subscriptionUtils.ts";
 import {
   sanitizeInput,
   isValidPhoneNumber,

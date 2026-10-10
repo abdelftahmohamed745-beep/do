@@ -1,4 +1,4 @@
-import { ClinicRole, ClinicPermission, ClinicMember } from '../types';
+import { ClinicRole, ClinicPermission, ClinicMember } from '../types.ts';
 
 export const ALL_CLINIC_PERMISSIONS: { key: ClinicPermission; labelAr: string; category: string }[] = [
   { key: 'VIEW_CLINIC', labelAr: 'عرض بيانات العيادة', category: 'العيادة' },

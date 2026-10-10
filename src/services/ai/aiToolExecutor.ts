@@ -1,4 +1,3 @@
-import { db } from '../../firebase/config';
 import {
   collection,
   doc,
@@ -12,20 +11,21 @@ import {
   orderBy,
   addDoc
 } from 'firebase/firestore';
+import { db } from '../../firebase/config.ts';
 import {
   ClinicMember,
   PatientRecord,
   ClinicTransaction,
   FollowUpAppointment
-} from '../../types';
-import { hasPermission } from '../../utils/permissions';
-import { AI_TOOL_DEFINITIONS } from './aiToolRegistry';
+} from '../../types.ts';
+import { hasPermission } from '../../utils/permissions.ts';
+import { AI_TOOL_DEFINITIONS } from './aiToolRegistry.ts';
 import {
   AiToolName,
   AiToolResult,
   AiAutonomousTask,
   AiAuditLog
-} from '../../types/aiAgent';
+} from '../../types/aiAgent.ts';
 import {
   searchClinicPatientsFast,
   getPatientProfile,
@@ -44,7 +44,7 @@ import {
   savePatientMedicalFile,
   addVisitToPatientMedicalFile,
   updatePatientVitalsAndNotes
-} from '../firebaseService';
+} from '../firebaseService.ts';
 
 export interface AiToolExecutionContext {
   clinicId: string;
@@ -843,7 +843,7 @@ export async function executeAiToolCall(
       case 'update_patient_profile': {
         const identifier = String(args.patientPhoneOrName || args.patientName || args.patientPhone || '').trim();
         if (!identifier) {
-          throw new Error('يرجى تحديد اسم المريض أو رقم هاتفه لتعديل ملفه الطبي');
+          throw new Error('يرجى ��حديد اسم المريض أو رقم هاتفه لتعديل ملفه الطبي');
         }
 
         // Resolve phone

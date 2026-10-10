@@ -1,7 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
-import { getGeminiFunctionDeclarations } from "../services/ai/aiToolRegistry";
-import { executeAiToolCall } from "../services/ai/aiToolExecutor";
-import { AiAgentMessage, AiToolCall, AiToolResult } from "../types/aiAgent";
+import { getGeminiFunctionDeclarations } from "../services/ai/aiToolRegistry.ts";
+import { executeAiToolCall } from "../services/ai/aiToolExecutor.ts";
+import { AiAgentMessage, AiToolCall, AiToolResult } from "../types/aiAgent.ts";
 
 let geminiClient: GoogleGenAI | null = null;
 
