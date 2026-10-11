@@ -1,4 +1,4 @@
-import { ClinicPermission, ClinicRole, PatientRecord, ClinicTransaction, FollowUpAppointment, DailySession } from '../types';
+import { ClinicPermission, ClinicRole, PatientRecord, ClinicTransaction, FollowUpAppointment, DailySession } from '../types.ts';
 
 export type AiToolName =
   // READ tools

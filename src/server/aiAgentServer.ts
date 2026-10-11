@@ -24,8 +24,12 @@ function getGemini(): GoogleGenAI | null {
 }
 
 // Model cascade: try fast and capable production models in sequence to prevent downtime or demand spikes
-// Keep the cascade on stable model IDs. Invalid/retired IDs can turn a normal chat into a server error.
-const CANDIDATE_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash'];
+// Keep the cascade on stable model IDs.
+const CANDIDATE_MODELS = [
+  process.env.GEMINI_MODEL,
+  'gemini-3.8-flash',
+  'gemini-flash-latest'
+].filter(Boolean) as string[];
 
 async function generateWithCascade(
   ai: GoogleGenAI,
@@ -113,10 +117,21 @@ export async function handleAiChatServer(params: HandleAiChatParams): Promise<{
 }> {
   const { clinicId, messages, userMember, isDoctorOwner, isSubscriptionActive, confirmedActionId, clientIp } = params;
 
-  const lastUserMessage = messages[messages.length - 1];
-  const userText = lastUserMessage?.content || '';
+  // 1. Authoritative extraction of the latest user message
+  const userMessages = Array.isArray(messages) ? messages.filter((m) => m && m.role === 'user') : [];
+  const latestUserMessage = userMessages[userMessages.length - 1];
+  const userText = (latestUserMessage?.content || '').trim();
+
+  // Validate payload - do not silently replace a missing message with a fake 'مرحبا'
+  if (!userText) {
+    return {
+      reply: 'لم يتم استلام أي نص في رسالة المستخدم. يرجى كتابة استفسار أو أمر للوكيل الذكي.',
+      status: 'failed'
+    };
+  }
 
   const ai = getGemini();
+  let geminiErrorMessage: string | null = null;
 
   // If Gemini API is available, run genuine agentic reasoning with function calling & tool chaining
   if (ai) {
@@ -124,24 +139,28 @@ export async function handleAiChatServer(params: HandleAiChatParams): Promise<{
       const functionDeclarations = getGeminiFunctionDeclarations();
 
       // Format clean conversation history for Gemini multi-turn reasoning
-      const contents: any[] = messages.slice(-10).map((m) => {
+      const sanitizedMessages = messages
+        .filter((m) => m && typeof m.content === 'string' && m.content.trim().length > 0)
+        .slice(-10);
+
+      const contents: any[] = sanitizedMessages.map((m) => {
         if (m.role === 'assistant') {
           return {
             role: 'model',
-            parts: [{ text: m.content || ' ' }]
+            parts: [{ text: m.content.trim() }]
           };
         }
         return {
           role: 'user',
-          parts: [{ text: m.content || ' ' }]
+          parts: [{ text: m.content.trim() }]
         };
       });
 
-      // Ensure last turn has text
+      // Ensure the final turn in contents is always the current user message
       if (contents.length === 0 || contents[contents.length - 1].role !== 'user') {
         contents.push({
           role: 'user',
-          parts: [{ text: userText || 'مرحبا' }]
+          parts: [{ text: userText }]
         });
       }
 
@@ -240,6 +259,7 @@ export async function handleAiChatServer(params: HandleAiChatParams): Promise<{
       };
     } catch (geminiError: any) {
       console.warn('[Dory AI Server Warning, falling back to deterministic intent engine]:', geminiError?.message || geminiError);
+      geminiErrorMessage = geminiError?.message || 'خطأ في استدعاء نموذج الذكاء الاصطناعي';
     }
   }
 
@@ -254,7 +274,8 @@ export async function handleAiChatServer(params: HandleAiChatParams): Promise<{
     isDoctorOwner,
     isSubscriptionActive,
     confirmedActionId,
-    clientIp
+    clientIp,
+    geminiErrorMessage
   });
 }
 
@@ -269,13 +290,14 @@ async function handleDeterministicIntent(params: {
   isSubscriptionActive: boolean;
   confirmedActionId?: string;
   clientIp?: string;
+  geminiErrorMessage?: string | null;
 }): Promise<{
   reply: string;
   toolCalls?: AiToolCall[];
   toolResults?: AiToolResult[];
   status: 'done' | 'failed' | 'needs_confirmation';
 }> {
-  const { clinicId, userText, userMember, isDoctorOwner, isSubscriptionActive, confirmedActionId, clientIp } = params;
+  const { clinicId, userText, userMember, isDoctorOwner, isSubscriptionActive, confirmedActionId, clientIp, geminiErrorMessage } = params;
   const t = userText.toLowerCase().trim();
 
   const toolCalls: AiToolCall[] = [];
@@ -501,8 +523,27 @@ async function handleDeterministicIntent(params: {
     return { reply, toolCalls, toolResults, status: res.status === 'success' ? 'done' : 'failed' };
   }
 
-  // Default conversational answer
-  const helpReply = `أهلاً بك! أنا وكيل دوري الذكي (Dory AI Agent). يمكنني مساعدتك في تنفيذ العديد من المهام الحقيقية في العيادة، مثل:
+  // If a Gemini error occurred and no deterministic intent matched, report failure explicitly
+  if (geminiErrorMessage) {
+    return {
+      reply: `عفواً، تعذر على الوكيل الذكي إتمام طلبك عبر الذكاء الاصطناعي (${geminiErrorMessage}). يرجى المحاولة لاحقاً أو استخدام الأوامر المباشرة للطابور والمالية والمرضى.`,
+      status: 'failed'
+    };
+  }
+
+  // Handle greetings cleanly
+  const isGreeting = t === 'مرحبا' || t === 'أهلا' || t === 'اهلا' || t.includes('السلام عليكم') || t === 'صباح الخير' || t === 'مساء الخير' || t === 'hi' || t === 'hello';
+  if (isGreeting) {
+    return {
+      reply: 'أهلاً بك يا دكتور! أنا وكيل دوري الذكي (Dory AI Agent) المساعد لعيادتك. كيف يمكنني مساعدتك اليوم؟ يمكنك الاستفسار عن الطابور، البحث عن المرضى، أو مراجعة الحسابات.',
+      status: 'done'
+    };
+  }
+
+  // Handle explicit help requests
+  const isHelpRequest = t.includes('مساعدة') || t.includes('تعليمات') || t.includes('help') || t.includes('أوامر') || t.includes('اوامر') || t.includes('بتعرف تعمل ايه');
+  if (isHelpRequest) {
+    const helpReply = `أهلاً بك! أنا وكيل دوري الذكي (Dory AI Agent). يمكنني مساعدتك في تنفيذ العديد من المهام الحقيقية في العيادة، مثل:
 • "نادِ على المريض التالي في الطابور"
 • "مين في طابور الانتظار دلوقتي؟"
 • "كشف حساب وإيرادات اليوم"
@@ -510,9 +551,16 @@ async function handleDeterministicIntent(params: {
 • "استعرض مواعيد إعادة الكشف القادمة"
 • "نبهني لو وقت الانتظار زاد عن 30 دقيقة" (إنشاء قواعد ومهام آلية)`;
 
+    return {
+      reply: helpReply,
+      status: 'done'
+    };
+  }
+
+  // Unrecognized offline command
   return {
-    reply: helpReply,
-    status: 'done'
+    reply: 'لم أتمكن من التعرف على هذا الأمر. يمكنك استخدام الأوامر المباشرة (مثل: "مين في الطابور"، "نادِ على المريض التالي"، "ملخص الإيرادات")، أو التأكد من توفر مفتاح الذكاء الاصطناعي للمحادثة الحرة.',
+    status: 'failed'
   };
 }
 

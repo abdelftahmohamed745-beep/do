@@ -19,7 +19,15 @@ export default async function handler(req: any, res: any) {
     const { clinicId, messages, confirmedActionId } = body;
 
     if (!clinicId) {
-      return res.status(400).json({ error: "معرف العيادة (clinicId) مطلوب" });
+      return res.status(400).json({ error: "معرف العيادة (clinicId) مطلوب", status: "failed" });
+    }
+
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({
+        reply: "يجب إرسال مصفوفة الرسائل وبها رسالة المستخدم الحالية",
+        status: "failed",
+        error: "INVALID_MESSAGES_PAYLOAD"
+      });
     }
 
     // 1. Authenticate user from Bearer Token - Fail Closed

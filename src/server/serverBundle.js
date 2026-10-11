@@ -453,7 +453,7 @@ var AI_TOOL_DEFINITIONS = {
     name: "add_patient_consultation_note",
     category: "WRITE",
     requiredPermission: "CREATE_PATIENT",
-    descriptionAr: "\u062A\u0633\u062C\u064A\u0644 \u0648\u062A\u0648\u062B\u064A\u0642 \u0632\u064A\u0627\u0631\u0629 \u0643\u0634\u0641 \u0637\u0628\u064A \u0644\u0644\u0645\u0631\u064A\u0636 \u0645\u0639 \u0627\u0644\u062A\u0634\u062E\u064A\u0635\u060C \u0627\u0644\u0634\u0643\u0648\u0649\u060C \u0648\u062E\u0637\u0629 \u0627\u0644\u0639\u0644\u0627\u062C \u0623\u0648 \u0627\u0644\u0631\u0648\u0634\u062A\u0629 \u0641\u064A \u0645\u0644\u0641\u0647 \u0627\u0644\u0637\u0628\u064A \u0627\u0644\u062F\u0627\u0626\u0645",
+    descriptionAr: "\u062A\u0633\u062C\u064A\u0644 \u0648\u062A\u0648\u062B\u064A\u0642 \u0632\u064A\u0627\u0631\u0629 \u0643\u0634\u0641 \u0637\u0628\u064A \u0644\uFFFD\uFFFD\u0645\u0631\u064A\u0636 \u0645\u0639 \u0627\u0644\u062A\u0634\u062E\u064A\u0635\u060C \u0627\u0644\u0634\u0643\u0648\u0649\u060C \u0648\u062E\u0637\u0629 \u0627\u0644\u0639\u0644\u0627\u062C \u0623\u0648 \u0627\u0644\u0631\u0648\u0634\u062A\u0629 \u0641\u064A \u0645\u0644\u0641\u0647 \u0627\u0644\u0637\u0628\u064A \u0627\u0644\u062F\u0627\u0626\u0645",
     descriptionEn: "Add clinical consultation entry with diagnosis, complaints, and prescription to patient medical file",
     parameters: {
       patientPhoneOrName: {
@@ -618,6 +618,20 @@ function getGeminiFunctionDeclarations() {
   });
 }
 
+// src/services/ai/aiToolExecutor.ts
+import {
+  collection as collection3,
+  doc as doc2,
+  getDoc as getDoc2,
+  getDocs as getDocs2,
+  updateDoc as updateDoc2,
+  query as query2,
+  where as where2,
+  limit as limit2,
+  orderBy as orderBy2,
+  addDoc as addDoc3
+} from "firebase/firestore";
+
 // src/firebase/config.ts
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
@@ -659,20 +673,6 @@ try {
 } catch {
   db = getFirestore(app, databaseId);
 }
-
-// src/services/ai/aiToolExecutor.ts
-import {
-  collection as collection3,
-  doc as doc2,
-  getDoc as getDoc2,
-  getDocs as getDocs2,
-  updateDoc as updateDoc2,
-  query as query2,
-  where as where2,
-  limit as limit2,
-  orderBy as orderBy2,
-  addDoc as addDoc3
-} from "firebase/firestore";
 
 // src/utils/permissions.ts
 var ALL_CLINIC_PERMISSIONS = [
@@ -2577,7 +2577,7 @@ async function executeAiToolCall(toolName, args, context) {
       case "update_patient_profile": {
         const identifier = String(args.patientPhoneOrName || args.patientName || args.patientPhone || "").trim();
         if (!identifier) {
-          throw new Error("\u064A\u0631\u062C\u0649 \u062A\u062D\u062F\u064A\u062F \u0627\u0633\u0645 \u0627\u0644\u0645\u0631\u064A\u0636 \u0623\u0648 \u0631\u0642\u0645 \u0647\u0627\u062A\u0641\u0647 \u0644\u062A\u0639\u062F\u064A\u0644 \u0645\u0644\u0641\u0647 \u0627\u0644\u0637\u0628\u064A");
+          throw new Error("\u064A\u0631\u062C\u0649 \uFFFD\uFFFD\u062D\u062F\u064A\u062F \u0627\u0633\u0645 \u0627\u0644\u0645\u0631\u064A\u0636 \u0623\u0648 \u0631\u0642\u0645 \u0647\u0627\u062A\u0641\u0647 \u0644\u062A\u0639\u062F\u064A\u0644 \u0645\u0644\u0641\u0647 \u0627\u0644\u0637\u0628\u064A");
         }
         let cleanPhone = normalizePhoneNumber(identifier);
         let resolvedName = args.patientName ? String(args.patientName).trim() : "";
@@ -2859,7 +2859,11 @@ function getGemini() {
   }
   return geminiClient;
 }
-var CANDIDATE_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"];
+var CANDIDATE_MODELS = [
+  process.env.GEMINI_MODEL,
+  "gemini-3.8-flash",
+  "gemini-flash-latest"
+].filter(Boolean);
 async function generateWithCascade(ai, contents, config) {
   let lastError = null;
   for (const model of CANDIDATE_MODELS) {
@@ -2921,28 +2925,37 @@ var SYSTEM_INSTRUCTION = `
 `;
 async function handleAiChatServer(params) {
   const { clinicId, messages, userMember, isDoctorOwner, isSubscriptionActive, confirmedActionId, clientIp } = params;
-  const lastUserMessage = messages[messages.length - 1];
-  const userText = lastUserMessage?.content || "";
+  const userMessages = Array.isArray(messages) ? messages.filter((m) => m && m.role === "user") : [];
+  const latestUserMessage = userMessages[userMessages.length - 1];
+  const userText = (latestUserMessage?.content || "").trim();
+  if (!userText) {
+    return {
+      reply: "\u0644\u0645 \u064A\u062A\u0645 \u0627\u0633\u062A\u0644\u0627\u0645 \u0623\u064A \u0646\u0635 \u0641\u064A \u0631\u0633\u0627\u0644\u0629 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645. \u064A\u0631\u062C\u0649 \u0643\u062A\u0627\u0628\u0629 \u0627\u0633\u062A\u0641\u0633\u0627\u0631 \u0623\u0648 \u0623\u0645\u0631 \u0644\u0644\u0648\u0643\u064A\u0644 \u0627\u0644\u0630\u0643\u064A.",
+      status: "failed"
+    };
+  }
   const ai = getGemini();
+  let geminiErrorMessage = null;
   if (ai) {
     try {
       const functionDeclarations = getGeminiFunctionDeclarations();
-      const contents = messages.slice(-10).map((m) => {
+      const sanitizedMessages = messages.filter((m) => m && typeof m.content === "string" && m.content.trim().length > 0).slice(-10);
+      const contents = sanitizedMessages.map((m) => {
         if (m.role === "assistant") {
           return {
             role: "model",
-            parts: [{ text: m.content || " " }]
+            parts: [{ text: m.content.trim() }]
           };
         }
         return {
           role: "user",
-          parts: [{ text: m.content || " " }]
+          parts: [{ text: m.content.trim() }]
         };
       });
       if (contents.length === 0 || contents[contents.length - 1].role !== "user") {
         contents.push({
           role: "user",
-          parts: [{ text: userText || "\u0645\u0631\u062D\u0628\u0627" }]
+          parts: [{ text: userText }]
         });
       }
       const allExecutedToolCalls = [];
@@ -3019,6 +3032,7 @@ async function handleAiChatServer(params) {
       };
     } catch (geminiError) {
       console.warn("[Dory AI Server Warning, falling back to deterministic intent engine]:", geminiError?.message || geminiError);
+      geminiErrorMessage = geminiError?.message || "\u062E\u0637\u0623 \u0641\u064A \u0627\u0633\u062A\u062F\u0639\u0627\u0621 \u0646\u0645\u0648\u0630\u062C \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A";
     }
   }
   return await handleDeterministicIntent({
@@ -3028,11 +3042,12 @@ async function handleAiChatServer(params) {
     isDoctorOwner,
     isSubscriptionActive,
     confirmedActionId,
-    clientIp
+    clientIp,
+    geminiErrorMessage
   });
 }
 async function handleDeterministicIntent(params) {
-  const { clinicId, userText, userMember, isDoctorOwner, isSubscriptionActive, confirmedActionId, clientIp } = params;
+  const { clinicId, userText, userMember, isDoctorOwner, isSubscriptionActive, confirmedActionId, clientIp, geminiErrorMessage } = params;
   const t = userText.toLowerCase().trim();
   const toolCalls = [];
   const toolResults = [];
@@ -3221,16 +3236,36 @@ async function handleDeterministicIntent(params) {
     const reply = res.status === "success" ? `\u062A\u0645 \u0625\u0646\u0634\u0627\u0621 \u0648\u062A\u0641\u0639\u064A\u0644 \u0627\u0644\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0622\u0644\u064A\u0629 \u0627\u0644\u0630\u0643\u064A\u0629 \u0628\u0646\u062C\u0627\u062D! \u0633\u064A\u0642\u0648\u0645 \u0648\u0643\u064A\u0644 \u062F\u0648\u0631\u064A \u0628\u0645\u0631\u0627\u0642\u0628\u0629 \u0627\u0644\u0637\u0627\u0628\u0648\u0631 \u0648\u062A\u0646\u0628\u064A\u0647 \u0637\u0627\u0642\u0645 \u0627\u0644\u0639\u064A\u0627\u062F\u0629 \u0639\u0646\u062F \u062A\u062E\u0637\u064A \u0648\u0642\u062A \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u0644\u0645\u062D\u062F\u062F.` : `\u062A\u0639\u0630\u0631 \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0622\u0644\u064A\u0629: ${res.error}`;
     return { reply, toolCalls, toolResults, status: res.status === "success" ? "done" : "failed" };
   }
-  const helpReply = `\u0623\u0647\u0644\u0627\u064B \u0628\u0643! \u0623\u0646\u0627 \u0648\u0643\u064A\u0644 \u062F\u0648\u0631\u064A \u0627\u0644\u0630\u0643\u064A (Dory AI Agent). \u064A\u0645\u0643\u0646\u0646\u064A \u0645\u0633\u0627\u0639\u062F\u062A\u0643 \u0641\u064A \u062A\u0646\u0641\u064A\u0630 \u0627\u0644\u0639\u062F\u064A\u062F \u0645\u0646 \u0627\u0644\u0645\u0647\u0627\u0645 \u0627\u0644\u062D\u0642\u064A\u0642\u064A\u0629 \u0641\u064A \u0627\u0644\u0639\u064A\u0627\u062F\u0629\u060C \u0645\u062B\u0644:
+  if (geminiErrorMessage) {
+    return {
+      reply: `\u0639\u0641\u0648\u0627\u064B\u060C \u062A\u0639\u0630\u0631 \u0639\u0644\u0649 \u0627\u0644\u0648\u0643\u064A\u0644 \u0627\u0644\u0630\u0643\u064A \u0625\u062A\u0645\u0627\u0645 \u0637\u0644\u0628\u0643 \u0639\u0628\u0631 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A (${geminiErrorMessage}). \u064A\u0631\u062C\u0649 \u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629 \u0644\u0627\u062D\u0642\u0627\u064B \u0623\u0648 \u0627\u0633\u062A\u062E\u062F\u0627\u0645 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629 \u0644\u0644\u0637\u0627\u0628\u0648\u0631 \u0648\u0627\u0644\u0645\u0627\u0644\u064A\u0629 \u0648\u0627\u0644\u0645\u0631\u0636\u0649.`,
+      status: "failed"
+    };
+  }
+  const isGreeting = t === "\u0645\u0631\u062D\u0628\u0627" || t === "\u0623\u0647\u0644\u0627" || t === "\u0627\u0647\u0644\u0627" || t.includes("\u0627\u0644\u0633\u0644\u0627\u0645 \u0639\u0644\u064A\u0643\u0645") || t === "\u0635\u0628\u0627\u062D \u0627\u0644\u062E\u064A\u0631" || t === "\u0645\u0633\u0627\u0621 \u0627\u0644\u062E\u064A\u0631" || t === "hi" || t === "hello";
+  if (isGreeting) {
+    return {
+      reply: "\u0623\u0647\u0644\u0627\u064B \u0628\u0643 \u064A\u0627 \u062F\u0643\u062A\u0648\u0631! \u0623\u0646\u0627 \u0648\u0643\u064A\u0644 \u062F\u0648\u0631\u064A \u0627\u0644\u0630\u0643\u064A (Dory AI Agent) \u0627\u0644\u0645\u0633\u0627\u0639\u062F \u0644\u0639\u064A\u0627\u062F\u062A\u0643. \u0643\u064A\u0641 \u064A\u0645\u0643\u0646\u0646\u064A \u0645\u0633\u0627\u0639\u062F\u062A\u0643 \u0627\u0644\u064A\u0648\u0645\u061F \u064A\u0645\u0643\u0646\u0643 \u0627\u0644\u0627\u0633\u062A\u0641\u0633\u0627\u0631 \u0639\u0646 \u0627\u0644\u0637\u0627\u0628\u0648\u0631\u060C \u0627\u0644\u0628\u062D\u062B \u0639\u0646 \u0627\u0644\u0645\u0631\u0636\u0649\u060C \u0623\u0648 \u0645\u0631\u0627\u062C\u0639\u0629 \u0627\u0644\u062D\u0633\u0627\u0628\u0627\u062A.",
+      status: "done"
+    };
+  }
+  const isHelpRequest = t.includes("\u0645\u0633\u0627\u0639\u062F\u0629") || t.includes("\u062A\u0639\u0644\u064A\u0645\u0627\u062A") || t.includes("help") || t.includes("\u0623\u0648\u0627\u0645\u0631") || t.includes("\u0627\u0648\u0627\u0645\u0631") || t.includes("\u0628\u062A\u0639\u0631\u0641 \u062A\u0639\u0645\u0644 \u0627\u064A\u0647");
+  if (isHelpRequest) {
+    const helpReply = `\u0623\u0647\u0644\u0627\u064B \u0628\u0643! \u0623\u0646\u0627 \u0648\u0643\u064A\u0644 \u062F\u0648\u0631\u064A \u0627\u0644\u0630\u0643\u064A (Dory AI Agent). \u064A\u0645\u0643\u0646\u0646\u064A \u0645\u0633\u0627\u0639\u062F\u062A\u0643 \u0641\u064A \u062A\u0646\u0641\u064A\u0630 \u0627\u0644\u0639\u062F\u064A\u062F \u0645\u0646 \u0627\u0644\u0645\u0647\u0627\u0645 \u0627\u0644\u062D\u0642\u064A\u0642\u064A\u0629 \u0641\u064A \u0627\u0644\u0639\u064A\u0627\u062F\u0629\u060C \u0645\u062B\u0644:
 \u2022 "\u0646\u0627\u062F\u0650 \u0639\u0644\u0649 \u0627\u0644\u0645\u0631\u064A\u0636 \u0627\u0644\u062A\u0627\u0644\u064A \u0641\u064A \u0627\u0644\u0637\u0627\u0628\u0648\u0631"
 \u2022 "\u0645\u064A\u0646 \u0641\u064A \u0637\u0627\u0628\u0648\u0631 \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631 \u062F\u0644\u0648\u0642\u062A\u064A\u061F"
 \u2022 "\u0643\u0634\u0641 \u062D\u0633\u0627\u0628 \u0648\u0625\u064A\u0631\u0627\u062F\u0627\u062A \u0627\u0644\u064A\u0648\u0645"
 \u2022 "\u0627\u0628\u062D\u062B \u0639\u0646 \u0645\u0644\u0641 \u0627\u0644\u0645\u0631\u064A\u0636 [\u0627\u0644\u0627\u0633\u0645 \u0623\u0648 \u0631\u0642\u0645 \u0627\u0644\u0647\u0627\u062A\u0641]"
 \u2022 "\u0627\u0633\u062A\u0639\u0631\u0636 \u0645\u0648\u0627\u0639\u064A\u062F \u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u0643\u0634\u0641 \u0627\u0644\u0642\u0627\u062F\u0645\u0629"
 \u2022 "\u0646\u0628\u0647\u0646\u064A \u0644\u0648 \u0648\u0642\u062A \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631 \u0632\u0627\u062F \u0639\u0646 30 \u062F\u0642\u064A\u0642\u0629" (\u0625\u0646\u0634\u0627\u0621 \u0642\u0648\u0627\u0639\u062F \u0648\u0645\u0647\u0627\u0645 \u0622\u0644\u064A\u0629)`;
+    return {
+      reply: helpReply,
+      status: "done"
+    };
+  }
   return {
-    reply: helpReply,
-    status: "done"
+    reply: '\u0644\u0645 \u0623\u062A\u0645\u0643\u0646 \u0645\u0646 \u0627\u0644\u062A\u0639\u0631\u0641 \u0639\u0644\u0649 \u0647\u0630\u0627 \u0627\u0644\u0623\u0645\u0631. \u064A\u0645\u0643\u0646\u0643 \u0627\u0633\u062A\u062E\u062F\u0627\u0645 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629 (\u0645\u062B\u0644: "\u0645\u064A\u0646 \u0641\u064A \u0627\u0644\u0637\u0627\u0628\u0648\u0631"\u060C "\u0646\u0627\u062F\u0650 \u0639\u0644\u0649 \u0627\u0644\u0645\u0631\u064A\u0636 \u0627\u0644\u062A\u0627\u0644\u064A"\u060C "\u0645\u0644\u062E\u0635 \u0627\u0644\u0625\u064A\u0631\u0627\u062F\u0627\u062A")\u060C \u0623\u0648 \u0627\u0644\u062A\u0623\u0643\u062F \u0645\u0646 \u062A\u0648\u0641\u0631 \u0645\u0641\u062A\u0627\u062D \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u0644\u0644\u0645\u062D\u0627\u062F\u062B\u0629 \u0627\u0644\u062D\u0631\u0629.',
+    status: "failed"
   };
 }
 function generateDeterministicSummary(results) {
