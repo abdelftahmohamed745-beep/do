@@ -3,7 +3,7 @@ import {
   SubscriptionDurationUnit,
   SubscriptionAuditAction,
   DoctorProfile
-} from '../types';
+} from '../types.ts';
 
 /**
  * Robust calendar-aware addition of months.

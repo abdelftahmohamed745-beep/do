@@ -45,6 +45,21 @@ import {
   addVisitToPatientMedicalFile,
   updatePatientVitalsAndNotes
 } from '../firebaseService.ts';
+import {
+  getClinicQueuePatientsRest,
+  getClinicFollowUpAppointmentsRest,
+  getClinicTransactionsRest,
+  getClinicAiTasksRest,
+  getClinicAiAuditLogsRest,
+  searchClinicPatientsRest,
+  getDocRest,
+  patchDocRest,
+  createDocRest,
+  resolvePatientInQueueRest,
+  callNextPatientRest,
+  updatePatientStatusRest,
+  bookPatientTicketRest
+} from '../../server/serverFirestore.ts';
 
 export interface AiToolExecutionContext {
   clinicId: string;
@@ -53,15 +68,26 @@ export interface AiToolExecutionContext {
   isSubscriptionActive: boolean;
   confirmedActionId?: string; // If user has confirmed this specific sensitive action
   clientIp?: string;
+  idToken?: string; // Authoritative user Bearer ID Token for Firestore REST
 }
 
 /**
  * Intelligent helper to resolve a patient in today's active queue by ticket ID, phone, sequence number, or name
  */
-async function resolvePatientInTodayQueue(clinicId: string, identifier: string): Promise<PatientRecord | null> {
+async function resolvePatientInTodayQueue(clinicId: string, identifier: string, idToken?: string): Promise<PatientRecord | null> {
   if (!identifier || typeof identifier !== 'string') return null;
   const cleanId = identifier.trim();
   if (!cleanId) return null;
+
+  // 1. If idToken is present, resolve authoritatively via REST
+  if (idToken) {
+    try {
+      const restPatient = await resolvePatientInQueueRest(clinicId, cleanId, idToken);
+      if (restPatient) return restPatient;
+    } catch (e) {
+      console.warn('[AI Executor] resolvePatientInQueueRest warning:', e);
+    }
+  }
 
   const today = getTodayDateString();
   const qRef = collection(db, 'queues', clinicId, 'patients');
@@ -216,7 +242,12 @@ export async function executeAiToolCall(
         if (!searchTerm) {
           throw new Error('يرجى تقديم كلمة بحث (اسم المريض أو رقم الهاتف)');
         }
-        const patients = await searchClinicPatientsFast(clinicId, searchTerm, limitCount);
+        let patients: any[] = [];
+        if (context.idToken) {
+          patients = await searchClinicPatientsRest(clinicId, searchTerm, limitCount, context.idToken);
+        } else {
+          patients = await searchClinicPatientsFast(clinicId, searchTerm, limitCount);
+        }
         result = {
           count: patients.length,
           patients: patients.map((p) => ({
@@ -245,11 +276,13 @@ export async function executeAiToolCall(
 
         // If not a direct phone number, resolve from today's queue or patient archive
         if (!cleanPhone) {
-          const inQueue = await resolvePatientInTodayQueue(clinicId, queryTerm);
+          const inQueue = await resolvePatientInTodayQueue(clinicId, queryTerm, context.idToken);
           if (inQueue?.phone) {
             cleanPhone = normalizePhoneNumber(inQueue.phone);
           } else {
-            const searchResults = await searchClinicPatientsFast(clinicId, queryTerm, 1);
+            const searchResults = context.idToken
+              ? await searchClinicPatientsRest(clinicId, queryTerm, 1, context.idToken)
+              : await searchClinicPatientsFast(clinicId, queryTerm, 1);
             if (searchResults.length > 0 && searchResults[0].patientPhone) {
               cleanPhone = normalizePhoneNumber(searchResults[0].patientPhone);
             }
@@ -265,9 +298,13 @@ export async function executeAiToolCall(
         let patientFile: any = null;
         if (cleanPhone) {
           try {
-            const fSnap = await getDoc(doc(db, 'doctors', clinicId, 'patientFiles', cleanPhone));
-            if (fSnap.exists()) {
-              patientFile = fSnap.data();
+            if (context.idToken) {
+              patientFile = await getDocRest(`doctors/${clinicId}/patientFiles`, cleanPhone, context.idToken);
+            } else {
+              const fSnap = await getDoc(doc(db, 'doctors', clinicId, 'patientFiles', cleanPhone));
+              if (fSnap.exists()) {
+                patientFile = fSnap.data();
+              }
             }
           } catch (e) {
             console.warn('Could not read doctor patient file:', e);
@@ -310,12 +347,28 @@ export async function executeAiToolCall(
         const targetDate = args.date ? String(args.date).trim() : getTodayDateString();
         const statusFilter = args.statusFilter ? String(args.statusFilter).trim() : 'all';
 
-        const qRef = collection(db, 'queues', clinicId, 'patients');
-        const qSnap = await getDocs(query(qRef, where('date', '==', targetDate), limit(150)));
+        let allPatients: PatientRecord[] = [];
 
-        const allPatients: PatientRecord[] = [];
-        qSnap.forEach((d) => allPatients.push({ id: d.id, ...d.data() } as PatientRecord));
-        allPatients.sort((a, b) => (a.sequenceNumber || 0) - (b.sequenceNumber || 0));
+        // 1. Authoritative REST query with user's verified token
+        if (context.idToken) {
+          try {
+            allPatients = await getClinicQueuePatientsRest(clinicId, targetDate, context.idToken);
+          } catch (restErr: any) {
+            console.warn('[AI Executor] REST get_daily_queue failed, attempting SDK fallback:', restErr?.message);
+          }
+        }
+
+        // 2. Client SDK fallback (e.g. in browser or local dev)
+        if (allPatients.length === 0 && !context.idToken) {
+          try {
+            const qRef = collection(db, 'queues', clinicId, 'patients');
+            const qSnap = await getDocs(query(qRef, where('date', '==', targetDate), limit(150)));
+            qSnap.forEach((d) => allPatients.push({ id: d.id, ...d.data() } as PatientRecord));
+            allPatients.sort((a, b) => (Number(a.sequenceNumber) || 0) - (Number(b.sequenceNumber) || 0));
+          } catch (sdkErr: any) {
+            console.warn('[AI Executor] Client SDK get_daily_queue error:', sdkErr?.message);
+          }
+        }
 
         let filtered = allPatients;
         if (statusFilter !== 'all') {
@@ -359,7 +412,10 @@ export async function executeAiToolCall(
             bookingReference: p.bookingReference || '',
             serviceName: p.serviceName || 'كشف',
             estimatedMinutes: p.estimatedMinutes
-          }))
+          })),
+          message: allPatients.length === 0
+            ? 'طابور اليوم فارغ حالياً، لا يوجد مرضى مسجلين في هذا التاريخ.'
+            : `طابور اليوم به ${allPatients.length} مريض: ${waiting.length} في الانتظار، ${called.length} بالداخل، ${done.length} انتهى كشفهم.`
         };
         break;
       }
@@ -369,34 +425,48 @@ export async function executeAiToolCall(
       // ----------------------------------------------------
       case 'get_follow_up_appointments': {
         const targetDate = args.date ? String(args.date).trim() : '';
-        const appCol = collection(db, 'followUpAppointments');
-        
-        let qAppointments;
-        if (targetDate) {
-          qAppointments = query(
-            appCol,
-            where('doctorId', '==', clinicId),
-            where('appointmentDate', '==', targetDate),
-            limit(50)
-          );
-        } else {
-          qAppointments = query(
-            appCol,
-            where('doctorId', '==', clinicId),
-            where('appointmentStatus', '==', 'upcoming'),
-            limit(50)
-          );
+        let list: FollowUpAppointment[] = [];
+
+        if (context.idToken) {
+          try {
+            list = await getClinicFollowUpAppointmentsRest(clinicId, targetDate, context.idToken);
+          } catch (restErr) {
+            console.warn('[AI Executor] REST get_follow_up_appointments error:', restErr);
+          }
         }
 
-        const snap = await getDocs(qAppointments);
-        const list: FollowUpAppointment[] = [];
-        snap.forEach((d) => {
-          const data = d.data();
-          if (data) {
-            list.push({ id: d.id, ...(data as Record<string, any>) } as FollowUpAppointment);
+        if (list.length === 0 && !context.idToken) {
+          const appCol = collection(db, 'followUpAppointments');
+          let qAppointments;
+          if (targetDate) {
+            qAppointments = query(
+              appCol,
+              where('doctorId', '==', clinicId),
+              where('appointmentDate', '==', targetDate),
+              limit(50)
+            );
+          } else {
+            qAppointments = query(
+              appCol,
+              where('doctorId', '==', clinicId),
+              where('appointmentStatus', '==', 'upcoming'),
+              limit(50)
+            );
           }
-        });
-        list.sort((a, b) => new Date(`${a.appointmentDate}T${a.appointmentTime}`).getTime() - new Date(`${b.appointmentDate}T${b.appointmentTime}`).getTime());
+
+          try {
+            const snap = await getDocs(qAppointments);
+            snap.forEach((d) => {
+              const data = d.data();
+              if (data) {
+                list.push({ id: d.id, ...(data as Record<string, any>) } as FollowUpAppointment);
+              }
+            });
+            list.sort((a, b) => new Date(`${a.appointmentDate}T${a.appointmentTime}`).getTime() - new Date(`${b.appointmentDate}T${b.appointmentTime}`).getTime());
+          } catch (sdkErr: any) {
+            console.warn('[AI Executor] Client SDK get_follow_up_appointments error:', sdkErr?.message);
+          }
+        }
 
         result = {
           totalCount: list.length,
@@ -419,36 +489,65 @@ export async function executeAiToolCall(
       // ----------------------------------------------------
       case 'get_financial_summary': {
         const targetDate = args.date ? String(args.date).trim() : getTodayDateString();
-        const txCol = collection(db, 'clinic_transactions');
-        const qTx = query(
-          txCol,
-          where('organizationId', '==', clinicId),
-          where('date', '==', targetDate),
-          limit(100)
-        );
-
-        const snap = await getDocs(qTx);
         let totalRevenue = 0;
         let totalCollected = 0;
         let totalRemaining = 0;
         const transactions: any[] = [];
 
-        snap.forEach((d) => {
-          const tx = d.data() as ClinicTransaction;
-          totalRevenue += Number(tx.totalAmount) || 0;
-          totalCollected += Number(tx.paidAmount) || 0;
-          totalRemaining += Number(tx.remainingAmount) || 0;
-          transactions.push({
-            id: d.id,
-            patientName: tx.patientName,
-            serviceName: tx.serviceName,
-            totalAmount: tx.totalAmount,
-            paidAmount: tx.paidAmount,
-            remainingAmount: tx.remainingAmount,
-            paymentStatus: tx.paymentStatus,
-            paymentMethod: tx.paymentMethod
-          });
-        });
+        if (context.idToken) {
+          try {
+            const restTxs = await getClinicTransactionsRest(clinicId, targetDate, context.idToken);
+            restTxs.forEach((tx) => {
+              totalRevenue += Number(tx.totalAmount) || 0;
+              totalCollected += Number(tx.paidAmount) || 0;
+              totalRemaining += Number(tx.remainingAmount) || 0;
+              transactions.push({
+                id: tx.id,
+                patientName: tx.patientName,
+                serviceName: tx.serviceName,
+                totalAmount: tx.totalAmount,
+                paidAmount: tx.paidAmount,
+                remainingAmount: tx.remainingAmount,
+                paymentStatus: tx.paymentStatus,
+                paymentMethod: tx.paymentMethod
+              });
+            });
+          } catch (restErr) {
+            console.warn('[AI Executor] REST get_financial_summary error:', restErr);
+          }
+        }
+
+        if (transactions.length === 0 && !context.idToken) {
+          const txCol = collection(db, 'clinic_transactions');
+          const qTx = query(
+            txCol,
+            where('organizationId', '==', clinicId),
+            where('date', '==', targetDate),
+            limit(100)
+          );
+
+          try {
+            const snap = await getDocs(qTx);
+            snap.forEach((d) => {
+              const tx = d.data() as ClinicTransaction;
+              totalRevenue += Number(tx.totalAmount) || 0;
+              totalCollected += Number(tx.paidAmount) || 0;
+              totalRemaining += Number(tx.remainingAmount) || 0;
+              transactions.push({
+                id: d.id,
+                patientName: tx.patientName,
+                serviceName: tx.serviceName,
+                totalAmount: tx.totalAmount,
+                paidAmount: tx.paidAmount,
+                remainingAmount: tx.remainingAmount,
+                paymentStatus: tx.paymentStatus,
+                paymentMethod: tx.paymentMethod
+              });
+            });
+          } catch (sdkErr: any) {
+            console.warn('[AI Executor] Client SDK get_financial_summary error:', sdkErr?.message);
+          }
+        }
 
         result = {
           date: targetDate,
@@ -465,10 +564,25 @@ export async function executeAiToolCall(
       // READ: get_active_tasks
       // ----------------------------------------------------
       case 'get_active_tasks': {
-        const tasksCol = collection(db, 'doctors', clinicId, 'aiTasks');
-        const snap = await getDocs(query(tasksCol, limit(50)));
-        const tasks: AiAutonomousTask[] = [];
-        snap.forEach((d) => tasks.push({ id: d.id, ...d.data() } as AiAutonomousTask));
+        let tasks: AiAutonomousTask[] = [];
+
+        if (context.idToken) {
+          try {
+            tasks = await getClinicAiTasksRest(clinicId, context.idToken);
+          } catch (restErr) {
+            console.warn('[AI Executor] REST get_active_tasks error:', restErr);
+          }
+        }
+
+        if (tasks.length === 0 && !context.idToken) {
+          try {
+            const tasksCol = collection(db, 'doctors', clinicId, 'aiTasks');
+            const snap = await getDocs(query(tasksCol, limit(50)));
+            snap.forEach((d) => tasks.push({ id: d.id, ...d.data() } as AiAutonomousTask));
+          } catch (sdkErr: any) {
+            console.warn('[AI Executor] Client SDK get_active_tasks error:', sdkErr?.message);
+          }
+        }
 
         result = {
           count: tasks.length,
@@ -493,20 +607,30 @@ export async function executeAiToolCall(
       // ----------------------------------------------------
       case 'get_audit_logs': {
         const limitCount = Number(args.limit) || 20;
-        const logsCol = collection(db, 'doctors', clinicId, 'aiAuditLogs');
-        const qLogs = query(logsCol, orderBy('timestamp', 'desc'), limit(limitCount));
-        
-        let snap;
-        try {
-          snap = await getDocs(qLogs);
-        } catch {
-          // Fallback query without orderBy index requirement
-          snap = await getDocs(query(logsCol, limit(limitCount)));
+        let logs: AiAuditLog[] = [];
+
+        if (context.idToken) {
+          try {
+            logs = await getClinicAiAuditLogsRest(clinicId, limitCount, context.idToken);
+          } catch (restErr) {
+            console.warn('[AI Executor] REST get_audit_logs error:', restErr);
+          }
         }
 
-        const logs: AiAuditLog[] = [];
-        snap.forEach((d) => logs.push({ id: d.id, ...d.data() } as AiAuditLog));
-        logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        if (logs.length === 0 && !context.idToken) {
+          const logsCol = collection(db, 'doctors', clinicId, 'aiAuditLogs');
+          const qLogs = query(logsCol, orderBy('timestamp', 'desc'), limit(limitCount));
+          
+          let snap;
+          try {
+            snap = await getDocs(qLogs);
+          } catch {
+            snap = await getDocs(query(logsCol, limit(limitCount)));
+          }
+
+          snap.forEach((d) => logs.push({ id: d.id, ...d.data() } as AiAuditLog));
+          logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        }
 
         result = {
           count: logs.length,
@@ -536,19 +660,34 @@ export async function executeAiToolCall(
           throw new Error('اسم المريض ورقم الهاتف مطلوبان لإتمام الحجز');
         }
 
-        const bookingRes = await bookPatient(
-          clinicId,
-          name,
-          phone,
-          actorUid,
-          'two_turns',
-          {
-            serviceId: 'srv_consultation',
-            serviceName,
-            price,
-            visitType: 'كشف جديد'
-          }
-        );
+        let bookingRes: { patientId: string; sequenceNumber: number; bookingReference: string };
+
+        if (context.idToken) {
+          bookingRes = await bookPatientTicketRest(
+            clinicId,
+            { name, phone, serviceName, price, actorUid },
+            context.idToken
+          );
+        } else {
+          const res = await bookPatient(
+            clinicId,
+            name,
+            phone,
+            actorUid,
+            'two_turns',
+            {
+              serviceId: 'srv_consultation',
+              serviceName,
+              price,
+              visitType: 'كشف جديد'
+            }
+          );
+          bookingRes = {
+            patientId: res.patientId,
+            sequenceNumber: res.sequenceNumber,
+            bookingReference: res.bookingReference
+          };
+        }
 
         result = {
           success: true,
@@ -566,8 +705,17 @@ export async function executeAiToolCall(
       // WRITE: call_next_patient
       // ----------------------------------------------------
       case 'call_next_patient': {
-        const callRes = await callNextPatient(clinicId);
-        if (!callRes.calledPatient) {
+        let calledPatient: PatientRecord | null = null;
+
+        if (context.idToken) {
+          const res = await callNextPatientRest(clinicId, context.idToken);
+          calledPatient = res.calledPatient;
+        } else {
+          const callRes = await callNextPatient(clinicId);
+          calledPatient = callRes.calledPatient;
+        }
+
+        if (!calledPatient) {
           result = {
             success: true,
             calledPatient: null,
@@ -577,13 +725,13 @@ export async function executeAiToolCall(
           result = {
             success: true,
             calledPatient: {
-              id: callRes.calledPatient.id,
-              name: callRes.calledPatient.name,
-              phone: callRes.calledPatient.phone,
-              sequenceNumber: callRes.calledPatient.sequenceNumber,
-              calledAt: callRes.calledPatient.calledAt
+              id: calledPatient.id,
+              name: calledPatient.name,
+              phone: calledPatient.phone,
+              sequenceNumber: calledPatient.sequenceNumber,
+              calledAt: calledPatient.calledAt
             },
-            message: `تم النداء على المريض التالي: [${callRes.calledPatient.name}] دور رقم (${callRes.calledPatient.sequenceNumber}) ودخل العيادة الآن.`
+            message: `تم النداء على المريض التالي: [${calledPatient.name}] دور رقم (${calledPatient.sequenceNumber}) ودخل العيادة الآن.`
           };
         }
         break;
@@ -601,11 +749,16 @@ export async function executeAiToolCall(
         }
 
         // Resolve patient in today's active queue if not a raw doc ID
-        const resolvedInQueue = await resolvePatientInTodayQueue(clinicId, identifier);
+        const resolvedInQueue = await resolvePatientInTodayQueue(clinicId, identifier, context.idToken);
         const targetTicketId = resolvedInQueue ? resolvedInQueue.id : identifier;
         const patientDisplayName = resolvedInQueue?.name || identifier;
 
-        await updatePatientStatus(clinicId, targetTicketId, newStatus);
+        if (context.idToken) {
+          await updatePatientStatusRest(clinicId, targetTicketId, newStatus, context.idToken);
+        } else {
+          await updatePatientStatus(clinicId, targetTicketId, newStatus);
+        }
+
         result = {
           success: true,
           patientRecordId: targetTicketId,
@@ -1130,10 +1283,17 @@ export async function executeAiToolCall(
 async function logAiAction(entry: Omit<AiAuditLog, 'id' | 'timestamp'>): Promise<void> {
   try {
     const nowIso = new Date().toISOString();
-    const logDoc: AiAuditLog = {
+    const sanitizedEntry: Record<string, any> = {};
+    Object.entries(entry).forEach(([k, v]) => {
+      if (v !== undefined) {
+        sanitizedEntry[k] = v;
+      }
+    });
+
+    const logDoc = {
       id: `ai_log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       timestamp: nowIso,
-      ...entry
+      ...sanitizedEntry
     };
 
     const logsCol = collection(db, 'doctors', entry.clinicId, 'aiAuditLogs');

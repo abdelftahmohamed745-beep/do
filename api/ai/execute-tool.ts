@@ -47,6 +47,7 @@ export default async function handler(req: any, res: any) {
     const userMember = accessCheck.userMember;
 
     const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket?.remoteAddress || "unknown_ip";
+    const idToken = authHeader?.startsWith("Bearer ") ? authHeader.substring(7).trim() : undefined;
 
     const toolResult = await executeAiToolCall(toolName, args || {}, {
       clinicId,
@@ -54,7 +55,8 @@ export default async function handler(req: any, res: any) {
       isDoctorOwner,
       isSubscriptionActive,
       confirmedActionId,
-      clientIp
+      clientIp,
+      idToken
     });
 
     return res.status(200).json(toolResult);

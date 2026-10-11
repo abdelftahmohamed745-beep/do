@@ -1,13 +1,13 @@
-import { handleAiChatServer } from './aiAgentServer';
-import { executeAiToolCall } from '../services/ai/aiToolExecutor';
+import { handleAiChatServer } from './aiAgentServer.ts';
+import { executeAiToolCall } from '../services/ai/aiToolExecutor.ts';
 import {
   verifyFirebaseIdToken,
   verifyClinicAccess,
   updateDoctorDocAuthoritative,
   deleteDoctorDocAuthoritative,
   getDocRestWithToken
-} from './authVerify';
-import { db } from '../firebase/config';
+} from './authVerify.ts';
+import { db } from '../firebase/config.ts';
 
 export {
   handleAiChatServer,

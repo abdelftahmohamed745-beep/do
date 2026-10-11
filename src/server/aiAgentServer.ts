@@ -28,29 +28,37 @@ function getGemini(): GoogleGenAI | null {
 const CANDIDATE_MODELS = [
   process.env.GEMINI_MODEL,
   'gemini-3.8-flash',
-  'gemini-flash-latest'
+  'gemini-flash-latest',
+  'gemini-3.1-flash-lite'
 ].filter(Boolean) as string[];
 
 async function generateWithCascade(
   ai: GoogleGenAI,
   contents: any[],
-  config: any
+  config: any,
+  timeoutMs = 12000
 ): Promise<{ modelUsed: string; response: any }> {
   let lastError: any = null;
 
   for (const model of CANDIDATE_MODELS) {
     try {
-      const response = await ai.models.generateContent({
+      const responsePromise = ai.models.generateContent({
         model,
         contents,
         config
       });
+
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`Timeout exceeding ${timeoutMs}ms on model ${model}`)), timeoutMs)
+      );
+
+      const response: any = await Promise.race([responsePromise, timeoutPromise]);
       return { modelUsed: model, response };
     } catch (err: any) {
       console.warn(`[Dory AI Model Cascade] Model ${model} encountered an issue:`, err?.status || err?.message);
       lastError = err;
-      // If temporary 503 or 429 spike, continue to next candidate model
-      if (err?.status === 503 || err?.status === 429 || err?.status === 404) {
+      // If temporary 503, 429 spike, 404, or timeout, continue to next candidate model
+      if (err?.status === 503 || err?.status === 429 || err?.status === 404 || String(err?.message).includes('Timeout')) {
         continue;
       }
     }
@@ -107,6 +115,7 @@ export interface HandleAiChatParams {
   isSubscriptionActive: boolean;
   confirmedActionId?: string;
   clientIp?: string;
+  idToken?: string;
 }
 
 export async function handleAiChatServer(params: HandleAiChatParams): Promise<{
@@ -115,7 +124,7 @@ export async function handleAiChatServer(params: HandleAiChatParams): Promise<{
   toolResults?: AiToolResult[];
   status: 'done' | 'failed' | 'needs_confirmation';
 }> {
-  const { clinicId, messages, userMember, isDoctorOwner, isSubscriptionActive, confirmedActionId, clientIp } = params;
+  const { clinicId, messages, userMember, isDoctorOwner, isSubscriptionActive, confirmedActionId, clientIp, idToken } = params;
 
   // 1. Authoritative extraction of the latest user message
   const userMessages = Array.isArray(messages) ? messages.filter((m) => m && m.role === 'user') : [];
@@ -203,7 +212,8 @@ export async function handleAiChatServer(params: HandleAiChatParams): Promise<{
               isDoctorOwner,
               isSubscriptionActive,
               confirmedActionId,
-              clientIp
+              clientIp,
+              idToken
             });
 
             const tcItem: AiToolCall = {
@@ -275,6 +285,7 @@ export async function handleAiChatServer(params: HandleAiChatParams): Promise<{
     isSubscriptionActive,
     confirmedActionId,
     clientIp,
+    idToken,
     geminiErrorMessage
   });
 }
@@ -290,6 +301,7 @@ async function handleDeterministicIntent(params: {
   isSubscriptionActive: boolean;
   confirmedActionId?: string;
   clientIp?: string;
+  idToken?: string;
   geminiErrorMessage?: string | null;
 }): Promise<{
   reply: string;
@@ -297,7 +309,7 @@ async function handleDeterministicIntent(params: {
   toolResults?: AiToolResult[];
   status: 'done' | 'failed' | 'needs_confirmation';
 }> {
-  const { clinicId, userText, userMember, isDoctorOwner, isSubscriptionActive, confirmedActionId, clientIp, geminiErrorMessage } = params;
+  const { clinicId, userText, userMember, isDoctorOwner, isSubscriptionActive, confirmedActionId, clientIp, idToken, geminiErrorMessage } = params;
   const t = userText.toLowerCase().trim();
 
   const toolCalls: AiToolCall[] = [];
@@ -311,7 +323,8 @@ async function handleDeterministicIntent(params: {
       isDoctorOwner,
       isSubscriptionActive,
       confirmedActionId,
-      clientIp
+      clientIp,
+      idToken
     });
 
     toolCalls.push({
@@ -339,7 +352,8 @@ async function handleDeterministicIntent(params: {
       isDoctorOwner,
       isSubscriptionActive,
       confirmedActionId,
-      clientIp
+      clientIp,
+      idToken
     });
 
     toolCalls.push({

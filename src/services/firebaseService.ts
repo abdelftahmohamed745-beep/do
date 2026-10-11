@@ -71,7 +71,7 @@ import {
   checkBookingRateLimit,
   recordBookingSuccess,
   writeAuditLog
-} from "./securityService";
+} from "./securityService.ts";
 
 export const DEMO_DOCTOR_ID = "demo-doctor-123";
 

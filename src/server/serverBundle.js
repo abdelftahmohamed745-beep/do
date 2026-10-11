@@ -1900,11 +1900,512 @@ async function updatePatientVitalsAndNotes(doctorId, patientPhone, updateData) {
   );
 }
 
+// src/server/serverFirestore.ts
+var FIREBASE_PROJECT_ID = "prefab-groove-502023-t4";
+var FIRESTORE_DATABASE_ID = "ai-studio-f8a934fa-e4dd-4561-8d66-6ad00154589f";
+var BASE_URL = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/${FIRESTORE_DATABASE_ID}/documents`;
+function parseFirestoreValue(val) {
+  if (!val || typeof val !== "object") return val;
+  if ("stringValue" in val) return val.stringValue;
+  if ("booleanValue" in val) return val.booleanValue;
+  if ("integerValue" in val) return Number(val.integerValue);
+  if ("doubleValue" in val) return Number(val.doubleValue);
+  if ("timestampValue" in val) return val.timestampValue;
+  if ("nullValue" in val) return null;
+  if ("mapValue" in val) {
+    const fields = val.mapValue.fields || {};
+    const res = {};
+    for (const [k, v] of Object.entries(fields)) {
+      res[k] = parseFirestoreValue(v);
+    }
+    return res;
+  }
+  if ("arrayValue" in val) {
+    const items = val.arrayValue.values || [];
+    return items.map((item) => parseFirestoreValue(item));
+  }
+  return null;
+}
+function parseFirestoreDoc(doc4) {
+  if (!doc4) return {};
+  const nameParts = (doc4.name || "").split("/");
+  const docId = nameParts[nameParts.length - 1] || "";
+  const fields = doc4.fields || {};
+  const parsedData = { id: docId };
+  for (const [key, val] of Object.entries(fields)) {
+    parsedData[key] = parseFirestoreValue(val);
+  }
+  if (doc4.createTime) parsedData._createTime = doc4.createTime;
+  if (doc4.updateTime) parsedData._updateTime = doc4.updateTime;
+  return parsedData;
+}
+function serializeToFirestoreRest(data) {
+  const fields = {};
+  for (const [key, val] of Object.entries(data)) {
+    if (val === void 0 || key === "id" || key === "_createTime" || key === "_updateTime") continue;
+    if (val === null) {
+      fields[key] = { nullValue: null };
+    } else if (typeof val === "string") {
+      fields[key] = { stringValue: val };
+    } else if (typeof val === "boolean") {
+      fields[key] = { booleanValue: val };
+    } else if (typeof val === "number") {
+      if (Number.isInteger(val)) {
+        fields[key] = { integerValue: String(val) };
+      } else {
+        fields[key] = { doubleValue: val };
+      }
+    } else if (Array.isArray(val)) {
+      fields[key] = {
+        arrayValue: {
+          values: val.map((v) => {
+            if (v === null || v === void 0) return { nullValue: null };
+            if (typeof v === "string") return { stringValue: v };
+            if (typeof v === "boolean") return { booleanValue: v };
+            if (typeof v === "number") return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
+            if (typeof v === "object") return { mapValue: { fields: serializeToFirestoreRest(v) } };
+            return { stringValue: String(v) };
+          })
+        }
+      };
+    } else if (typeof val === "object") {
+      fields[key] = {
+        mapValue: {
+          fields: serializeToFirestoreRest(val)
+        }
+      };
+    }
+  }
+  return fields;
+}
+function getHeaders(idToken) {
+  const headers = {
+    "Content-Type": "application/json"
+  };
+  if (idToken) {
+    headers["Authorization"] = `Bearer ${idToken}`;
+  }
+  return headers;
+}
+async function listCollectionRest(collectionPath, pageSize = 100, idToken) {
+  try {
+    const url = `${BASE_URL}/${collectionPath}?pageSize=${pageSize}`;
+    const res = await fetch(url, { headers: getHeaders(idToken) });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      console.warn(`[ServerFirestore] listCollectionRest error (${res.status}) on ${collectionPath}:`, err);
+      return [];
+    }
+    const data = await res.json();
+    const docs = data.documents || [];
+    return docs.map((d) => parseFirestoreDoc(d));
+  } catch (error) {
+    console.warn(`[ServerFirestore] Exception listing ${collectionPath}:`, error);
+    return [];
+  }
+}
+async function getDocRest(collectionPath, docId, idToken) {
+  try {
+    const url = `${BASE_URL}/${collectionPath}/${encodeURIComponent(docId)}`;
+    const res = await fetch(url, { headers: getHeaders(idToken) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return parseFirestoreDoc(data);
+  } catch (error) {
+    console.warn(`[ServerFirestore] Exception getting ${collectionPath}/${docId}:`, error);
+    return null;
+  }
+}
+async function runQueryRest(parentPath, structuredQuery, idToken) {
+  try {
+    const url = parentPath ? `${BASE_URL}/${parentPath}:runQuery` : `${BASE_URL}:runQuery`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: getHeaders(idToken),
+      body: JSON.stringify({ structuredQuery })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      console.warn(`[ServerFirestore] runQueryRest error (${res.status}) on ${parentPath || "root"}:`, err);
+      return [];
+    }
+    const data = await res.json();
+    if (!Array.isArray(data)) return [];
+    const results = [];
+    for (const item of data) {
+      if (item.document) {
+        results.push(parseFirestoreDoc(item.document));
+      }
+    }
+    return results;
+  } catch (error) {
+    console.warn(`[ServerFirestore] Exception in runQueryRest:`, error);
+    return [];
+  }
+}
+async function createDocRest(collectionPath, data, customDocId, idToken) {
+  try {
+    let url = `${BASE_URL}/${collectionPath}`;
+    if (customDocId) {
+      url += `?documentId=${encodeURIComponent(customDocId)}`;
+    }
+    const res = await fetch(url, {
+      method: "POST",
+      headers: getHeaders(idToken),
+      body: JSON.stringify({ fields: serializeToFirestoreRest(data) })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      console.warn(`[ServerFirestore] createDocRest error (${res.status}) on ${collectionPath}:`, err);
+      return null;
+    }
+    const resData = await res.json();
+    return parseFirestoreDoc(resData);
+  } catch (error) {
+    console.warn(`[ServerFirestore] Exception creating doc in ${collectionPath}:`, error);
+    return null;
+  }
+}
+async function patchDocRest(collectionPath, docId, updates, idToken) {
+  try {
+    const keys = Object.keys(updates).filter((k) => k !== "id");
+    if (keys.length === 0) return true;
+    const fieldMask = keys.map((k) => `updateMask.fieldPaths=${encodeURIComponent(k)}`).join("&");
+    const url = `${BASE_URL}/${collectionPath}/${encodeURIComponent(docId)}?${fieldMask}`;
+    const res = await fetch(url, {
+      method: "PATCH",
+      headers: getHeaders(idToken),
+      body: JSON.stringify({ fields: serializeToFirestoreRest(updates) })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      console.warn(`[ServerFirestore] patchDocRest error (${res.status}) on ${collectionPath}/${docId}:`, err);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.warn(`[ServerFirestore] Exception patching ${collectionPath}/${docId}:`, error);
+    return false;
+  }
+}
+async function getClinicQueuePatientsRest(clinicId, targetDate, idToken) {
+  const queryResult = await runQueryRest(
+    `queues/${clinicId}`,
+    {
+      from: [{ collectionId: "patients" }],
+      where: {
+        fieldFilter: {
+          field: { fieldPath: "date" },
+          op: "EQUAL",
+          value: { stringValue: targetDate }
+        }
+      },
+      limit: 150
+    },
+    idToken
+  );
+  let patients = queryResult;
+  if (patients.length === 0) {
+    const all = await listCollectionRest(`queues/${clinicId}/patients`, 150, idToken);
+    patients = all.filter((p) => p.date === targetDate);
+  }
+  patients.sort((a, b) => (Number(a.sequenceNumber) || 0) - (Number(b.sequenceNumber) || 0));
+  return patients;
+}
+async function getClinicFollowUpAppointmentsRest(clinicId, targetDate, idToken) {
+  const filters = [
+    {
+      fieldFilter: {
+        field: { fieldPath: "doctorId" },
+        op: "EQUAL",
+        value: { stringValue: clinicId }
+      }
+    }
+  ];
+  if (targetDate) {
+    filters.push({
+      fieldFilter: {
+        field: { fieldPath: "appointmentDate" },
+        op: "EQUAL",
+        value: { stringValue: targetDate }
+      }
+    });
+  } else {
+    filters.push({
+      fieldFilter: {
+        field: { fieldPath: "appointmentStatus" },
+        op: "EQUAL",
+        value: { stringValue: "upcoming" }
+      }
+    });
+  }
+  let results = await runQueryRest(
+    null,
+    {
+      from: [{ collectionId: "followUpAppointments" }],
+      where: {
+        compositeFilter: {
+          op: "AND",
+          filters
+        }
+      },
+      limit: 50
+    },
+    idToken
+  );
+  if (results.length === 0) {
+    const all = await listCollectionRest("followUpAppointments", 60, idToken);
+    results = all.filter((a) => {
+      if (a.doctorId !== clinicId) return false;
+      if (targetDate) return a.appointmentDate === targetDate;
+      return a.appointmentStatus === "upcoming";
+    });
+  }
+  results.sort((a, b) => {
+    const tA = (/* @__PURE__ */ new Date(`${a.appointmentDate || "1970-01-01"}T${a.appointmentTime || "00:00"}`)).getTime();
+    const tB = (/* @__PURE__ */ new Date(`${b.appointmentDate || "1970-01-01"}T${b.appointmentTime || "00:00"}`)).getTime();
+    return tA - tB;
+  });
+  return results;
+}
+async function getClinicTransactionsRest(clinicId, targetDate, idToken) {
+  let results = await runQueryRest(
+    null,
+    {
+      from: [{ collectionId: "clinic_transactions" }],
+      where: {
+        compositeFilter: {
+          op: "AND",
+          filters: [
+            {
+              fieldFilter: {
+                field: { fieldPath: "organizationId" },
+                op: "EQUAL",
+                value: { stringValue: clinicId }
+              }
+            },
+            {
+              fieldFilter: {
+                field: { fieldPath: "date" },
+                op: "EQUAL",
+                value: { stringValue: targetDate }
+              }
+            }
+          ]
+        }
+      },
+      limit: 100
+    },
+    idToken
+  );
+  if (results.length === 0) {
+    const all = await listCollectionRest("clinic_transactions", 100, idToken);
+    results = all.filter((t) => t.organizationId === clinicId && t.date === targetDate);
+  }
+  return results;
+}
+async function getClinicAiTasksRest(clinicId, idToken) {
+  const docs = await listCollectionRest(`doctors/${clinicId}/aiTasks`, 50, idToken);
+  return docs;
+}
+async function getClinicAiAuditLogsRest(clinicId, limitCount = 20, idToken) {
+  const docs = await listCollectionRest(`doctors/${clinicId}/aiAuditLogs`, limitCount, idToken);
+  docs.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+  return docs;
+}
+async function searchClinicPatientsRest(clinicId, searchTerm, limitCount = 8, idToken) {
+  const cleanTerm = searchTerm.trim().toLowerCase();
+  const cleanPhone = normalizePhoneNumber(cleanTerm);
+  if (cleanPhone && cleanPhone.length >= 10) {
+    const directDoc = await getDocRest(`doctors/${clinicId}/patientFiles`, cleanPhone, idToken);
+    if (directDoc) {
+      return [{
+        id: directDoc.patientId || cleanPhone,
+        patientName: directDoc.patientName,
+        patientPhone: directDoc.patientPhone || cleanPhone,
+        visitsCount: directDoc.visitsCount || (directDoc.visits ? directDoc.visits.length : 1),
+        lastVisitDate: directDoc.lastVisitDate,
+        totalOutstandingBalance: directDoc.totalOutstandingBalance || 0,
+        allergies: directDoc.allergies || "\u0644\u0627 \u062A\u0648\u062C\u062F \u062D\u0633\u0627\u0633\u064A\u0629 \u0645\u0633\u062C\u0644\u0629",
+        chronicDiseases: directDoc.chronicDiseases || "\u0644\u0627 \u062A\u0648\u062C\u062F \u0623\u0645\u0631\u0627\u0636 \u0645\u0632\u0645\u0646\u0629",
+        lastVisitDiagnosis: directDoc.lastVisitDiagnosis || "\u063A\u064A\u0631 \u0645\u062D\u062F\u062F"
+      }];
+    }
+  }
+  const files = await listCollectionRest(`doctors/${clinicId}/patientFiles`, 100, idToken);
+  const queueDocs = await listCollectionRest(`queues/${clinicId}/patients`, 100, idToken);
+  const results = [];
+  const seenPhones = /* @__PURE__ */ new Set();
+  for (const f of files) {
+    const name = String(f.patientName || "").toLowerCase();
+    const phone = String(f.patientPhone || "");
+    const normPhone = normalizePhoneNumber(phone);
+    if (name.includes(cleanTerm) || phone.includes(cleanTerm) || cleanPhone && normPhone.includes(cleanPhone)) {
+      if (normPhone && !seenPhones.has(normPhone)) {
+        seenPhones.add(normPhone);
+        results.push({
+          id: f.patientId || f.id || normPhone,
+          patientName: f.patientName,
+          patientPhone: f.patientPhone || normPhone,
+          visitsCount: f.visitsCount || (f.visits ? f.visits.length : 1),
+          lastVisitDate: f.lastVisitDate,
+          totalOutstandingBalance: f.totalOutstandingBalance || 0,
+          allergies: f.allergies || "\u0644\u0627 \u062A\u0648\u062C\u062F \u062D\u0633\u0627\u0633\u064A\u0629 \u0645\u0633\u062C\u0644\u0629",
+          chronicDiseases: f.chronicDiseases || "\u0644\u0627 \u062A\u0648\u062C\u062F \u0623\u0645\u0631\u0627\u0636 \u0645\u0632\u0645\u0646\u0629",
+          lastVisitDiagnosis: f.lastVisitDiagnosis || "\u063A\u064A\u0631 \u0645\u062D\u062F\u062F"
+        });
+      }
+    }
+    if (results.length >= limitCount) break;
+  }
+  if (results.length < limitCount) {
+    for (const q of queueDocs) {
+      const name = String(q.name || "").toLowerCase();
+      const phone = String(q.phone || "");
+      const normPhone = normalizePhoneNumber(phone);
+      if (name.includes(cleanTerm) || phone.includes(cleanTerm) || cleanPhone && normPhone.includes(cleanPhone)) {
+        if (normPhone && !seenPhones.has(normPhone)) {
+          seenPhones.add(normPhone);
+          results.push({
+            id: q.id,
+            patientName: q.name,
+            patientPhone: q.phone,
+            visitsCount: 1,
+            lastVisitDate: q.date,
+            totalOutstandingBalance: 0,
+            allergies: "\u0644\u0627 \u062A\u0648\u062C\u062F \u062D\u0633\u0627\u0633\u064A\u0629 \u0645\u0633\u062C\u0644\u0629",
+            chronicDiseases: "\u0644\u0627 \u062A\u0648\u062C\u062F \u0623\u0645\u0631\u0627\u0636 \u0645\u0632\u0645\u0646\u0629",
+            lastVisitDiagnosis: q.serviceName || "\u0643\u0634\u0641"
+          });
+        }
+      }
+      if (results.length >= limitCount) break;
+    }
+  }
+  return results;
+}
+async function resolvePatientInQueueRest(clinicId, identifier, idToken) {
+  if (!identifier || typeof identifier !== "string") return null;
+  const cleanId = identifier.trim().toLowerCase();
+  if (!cleanId) return null;
+  const today = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+  const patients = await getClinicQueuePatientsRest(clinicId, today, idToken);
+  if (!patients || patients.length === 0) return null;
+  const cleanPhone = normalizePhoneNumber(cleanId);
+  if (cleanPhone) {
+    const byPhone = patients.find((p) => normalizePhoneNumber(p.phone) === cleanPhone);
+    if (byPhone) return byPhone;
+  }
+  const seqNum = Number(cleanId);
+  if (!isNaN(seqNum) && seqNum > 0) {
+    const bySeq = patients.find((p) => Number(p.sequenceNumber) === seqNum);
+    if (bySeq) return bySeq;
+  }
+  const byId = patients.find((p) => p.id === identifier.trim());
+  if (byId) return byId;
+  const byNameExact = patients.find((p) => (p.name || "").trim().toLowerCase() === cleanId);
+  if (byNameExact) return byNameExact;
+  const byNamePartial = patients.filter((p) => (p.name || "").toLowerCase().includes(cleanId));
+  if (byNamePartial.length > 0) {
+    const active = byNamePartial.find((p) => p.status === "called" || p.status === "waiting");
+    return active || byNamePartial[0];
+  }
+  return null;
+}
+async function callNextPatientRest(clinicId, idToken) {
+  const today = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+  const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+  const patients = await getClinicQueuePatientsRest(clinicId, today, idToken);
+  patients.sort((a, b) => (Number(a.sequenceNumber) || 0) - (Number(b.sequenceNumber) || 0));
+  const currentCalled = patients.find((p) => p.status === "called");
+  if (currentCalled && currentCalled.id) {
+    await patchDocRest(
+      `queues/${clinicId}/patients`,
+      currentCalled.id,
+      {
+        status: "done",
+        doneAt: nowIso,
+        updatedAt: nowIso
+      },
+      idToken
+    );
+  }
+  const nextWaiting = patients.find((p) => p.status === "waiting");
+  if (!nextWaiting || !nextWaiting.id) {
+    return { calledPatient: null };
+  }
+  const success = await patchDocRest(
+    `queues/${clinicId}/patients`,
+    nextWaiting.id,
+    {
+      status: "called",
+      calledAt: nowIso,
+      updatedAt: nowIso
+    },
+    idToken
+  );
+  if (success) {
+    return {
+      calledPatient: {
+        ...nextWaiting,
+        status: "called",
+        calledAt: nowIso
+      }
+    };
+  }
+  return { calledPatient: null };
+}
+async function updatePatientStatusRest(clinicId, ticketId, newStatus, idToken) {
+  const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+  const updates = {
+    status: newStatus,
+    updatedAt: nowIso
+  };
+  if (newStatus === "done") updates.doneAt = nowIso;
+  if (newStatus === "called") updates.calledAt = nowIso;
+  if (newStatus === "cancelled") updates.cancelledAt = nowIso;
+  return await patchDocRest(`queues/${clinicId}/patients`, ticketId, updates, idToken);
+}
+async function bookPatientTicketRest(clinicId, data, idToken) {
+  const today = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+  const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+  const patients = await getClinicQueuePatientsRest(clinicId, today, idToken);
+  const sequenceNumber = patients.length + 1;
+  const bookingReference = `BK-${Date.now().toString(36).toUpperCase().slice(-4)}`;
+  const newTicketData = {
+    name: data.name,
+    phone: data.phone,
+    date: today,
+    sequenceNumber,
+    bookingReference,
+    status: "waiting",
+    serviceName: data.serviceName || "\u0643\u0634\u0641 \u062C\u062F\u064A\u062F",
+    price: data.price || 200,
+    createdBy: data.actorUid || "AI_AGENT",
+    createdAt: nowIso,
+    updatedAt: nowIso
+  };
+  const created = await createDocRest(`queues/${clinicId}/patients`, newTicketData, void 0, idToken);
+  return {
+    patientId: created?.id || `ticket_${Date.now()}`,
+    sequenceNumber,
+    bookingReference
+  };
+}
+
 // src/services/ai/aiToolExecutor.ts
-async function resolvePatientInTodayQueue(clinicId, identifier) {
+async function resolvePatientInTodayQueue(clinicId, identifier, idToken) {
   if (!identifier || typeof identifier !== "string") return null;
   const cleanId = identifier.trim();
   if (!cleanId) return null;
+  if (idToken) {
+    try {
+      const restPatient = await resolvePatientInQueueRest(clinicId, cleanId, idToken);
+      if (restPatient) return restPatient;
+    } catch (e) {
+      console.warn("[AI Executor] resolvePatientInQueueRest warning:", e);
+    }
+  }
   const today = getTodayDateString();
   const qRef = collection3(db, "queues", clinicId, "patients");
   try {
@@ -2020,7 +2521,12 @@ async function executeAiToolCall(toolName, args, context) {
         if (!searchTerm) {
           throw new Error("\u064A\u0631\u062C\u0649 \u062A\u0642\u062F\u064A\u0645 \u0643\u0644\u0645\u0629 \u0628\u062D\u062B (\u0627\u0633\u0645 \u0627\u0644\u0645\u0631\u064A\u0636 \u0623\u0648 \u0631\u0642\u0645 \u0627\u0644\u0647\u0627\u062A\u0641)");
         }
-        const patients = await searchClinicPatientsFast(clinicId, searchTerm, limitCount);
+        let patients = [];
+        if (context.idToken) {
+          patients = await searchClinicPatientsRest(clinicId, searchTerm, limitCount, context.idToken);
+        } else {
+          patients = await searchClinicPatientsFast(clinicId, searchTerm, limitCount);
+        }
         result = {
           count: patients.length,
           patients: patients.map((p) => ({
@@ -2045,11 +2551,11 @@ async function executeAiToolCall(toolName, args, context) {
         if (!queryTerm) throw new Error("\u0627\u0633\u0645 \u0627\u0644\u0645\u0631\u064A\u0636 \u0623\u0648 \u0631\u0642\u0645 \u0647\u0627\u062A\u0641\u0647 \u0623\u0648 \u0643\u0648\u062F\u0647 \u0645\u0637\u0644\u0648\u0628 \u0644\u0639\u0631\u0636 \u0627\u0644\u062A\u0641\u0627\u0635\u064A\u0644");
         let cleanPhone = normalizePhoneNumber(queryTerm);
         if (!cleanPhone) {
-          const inQueue = await resolvePatientInTodayQueue(clinicId, queryTerm);
+          const inQueue = await resolvePatientInTodayQueue(clinicId, queryTerm, context.idToken);
           if (inQueue?.phone) {
             cleanPhone = normalizePhoneNumber(inQueue.phone);
           } else {
-            const searchResults = await searchClinicPatientsFast(clinicId, queryTerm, 1);
+            const searchResults = context.idToken ? await searchClinicPatientsRest(clinicId, queryTerm, 1, context.idToken) : await searchClinicPatientsFast(clinicId, queryTerm, 1);
             if (searchResults.length > 0 && searchResults[0].patientPhone) {
               cleanPhone = normalizePhoneNumber(searchResults[0].patientPhone);
             }
@@ -2062,9 +2568,13 @@ async function executeAiToolCall(toolName, args, context) {
         let patientFile = null;
         if (cleanPhone) {
           try {
-            const fSnap = await getDoc2(doc2(db, "doctors", clinicId, "patientFiles", cleanPhone));
-            if (fSnap.exists()) {
-              patientFile = fSnap.data();
+            if (context.idToken) {
+              patientFile = await getDocRest(`doctors/${clinicId}/patientFiles`, cleanPhone, context.idToken);
+            } else {
+              const fSnap = await getDoc2(doc2(db, "doctors", clinicId, "patientFiles", cleanPhone));
+              if (fSnap.exists()) {
+                patientFile = fSnap.data();
+              }
             }
           } catch (e) {
             console.warn("Could not read doctor patient file:", e);
@@ -2104,11 +2614,24 @@ async function executeAiToolCall(toolName, args, context) {
       case "get_daily_queue": {
         const targetDate = args.date ? String(args.date).trim() : getTodayDateString();
         const statusFilter = args.statusFilter ? String(args.statusFilter).trim() : "all";
-        const qRef = collection3(db, "queues", clinicId, "patients");
-        const qSnap = await getDocs2(query2(qRef, where2("date", "==", targetDate), limit2(150)));
-        const allPatients = [];
-        qSnap.forEach((d) => allPatients.push({ id: d.id, ...d.data() }));
-        allPatients.sort((a, b) => (a.sequenceNumber || 0) - (b.sequenceNumber || 0));
+        let allPatients = [];
+        if (context.idToken) {
+          try {
+            allPatients = await getClinicQueuePatientsRest(clinicId, targetDate, context.idToken);
+          } catch (restErr) {
+            console.warn("[AI Executor] REST get_daily_queue failed, attempting SDK fallback:", restErr?.message);
+          }
+        }
+        if (allPatients.length === 0 && !context.idToken) {
+          try {
+            const qRef = collection3(db, "queues", clinicId, "patients");
+            const qSnap = await getDocs2(query2(qRef, where2("date", "==", targetDate), limit2(150)));
+            qSnap.forEach((d) => allPatients.push({ id: d.id, ...d.data() }));
+            allPatients.sort((a, b) => (Number(a.sequenceNumber) || 0) - (Number(b.sequenceNumber) || 0));
+          } catch (sdkErr) {
+            console.warn("[AI Executor] Client SDK get_daily_queue error:", sdkErr?.message);
+          }
+        }
         let filtered = allPatients;
         if (statusFilter !== "all") {
           filtered = allPatients.filter((p) => p.status === statusFilter);
@@ -2145,7 +2668,8 @@ async function executeAiToolCall(toolName, args, context) {
             bookingReference: p.bookingReference || "",
             serviceName: p.serviceName || "\u0643\u0634\u0641",
             estimatedMinutes: p.estimatedMinutes
-          }))
+          })),
+          message: allPatients.length === 0 ? "\u0637\u0627\u0628\u0648\u0631 \u0627\u0644\u064A\u0648\u0645 \u0641\u0627\u0631\u063A \u062D\u0627\u0644\u064A\u0627\u064B\u060C \u0644\u0627 \u064A\u0648\u062C\u062F \u0645\u0631\u0636\u0649 \u0645\u0633\u062C\u0644\u064A\u0646 \u0641\u064A \u0647\u0630\u0627 \u0627\u0644\u062A\u0627\u0631\u064A\u062E." : `\u0637\u0627\u0628\u0648\u0631 \u0627\u0644\u064A\u0648\u0645 \u0628\u0647 ${allPatients.length} \u0645\u0631\u064A\u0636: ${waiting.length} \u0641\u064A \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631\u060C ${called.length} \u0628\u0627\u0644\u062F\u0627\u062E\u0644\u060C ${done.length} \u0627\u0646\u062A\u0647\u0649 \u0643\u0634\u0641\u0647\u0645.`
         };
         break;
       }
@@ -2154,32 +2678,45 @@ async function executeAiToolCall(toolName, args, context) {
       // ----------------------------------------------------
       case "get_follow_up_appointments": {
         const targetDate = args.date ? String(args.date).trim() : "";
-        const appCol = collection3(db, "followUpAppointments");
-        let qAppointments;
-        if (targetDate) {
-          qAppointments = query2(
-            appCol,
-            where2("doctorId", "==", clinicId),
-            where2("appointmentDate", "==", targetDate),
-            limit2(50)
-          );
-        } else {
-          qAppointments = query2(
-            appCol,
-            where2("doctorId", "==", clinicId),
-            where2("appointmentStatus", "==", "upcoming"),
-            limit2(50)
-          );
-        }
-        const snap = await getDocs2(qAppointments);
-        const list = [];
-        snap.forEach((d) => {
-          const data = d.data();
-          if (data) {
-            list.push({ id: d.id, ...data });
+        let list = [];
+        if (context.idToken) {
+          try {
+            list = await getClinicFollowUpAppointmentsRest(clinicId, targetDate, context.idToken);
+          } catch (restErr) {
+            console.warn("[AI Executor] REST get_follow_up_appointments error:", restErr);
           }
-        });
-        list.sort((a, b) => (/* @__PURE__ */ new Date(`${a.appointmentDate}T${a.appointmentTime}`)).getTime() - (/* @__PURE__ */ new Date(`${b.appointmentDate}T${b.appointmentTime}`)).getTime());
+        }
+        if (list.length === 0 && !context.idToken) {
+          const appCol = collection3(db, "followUpAppointments");
+          let qAppointments;
+          if (targetDate) {
+            qAppointments = query2(
+              appCol,
+              where2("doctorId", "==", clinicId),
+              where2("appointmentDate", "==", targetDate),
+              limit2(50)
+            );
+          } else {
+            qAppointments = query2(
+              appCol,
+              where2("doctorId", "==", clinicId),
+              where2("appointmentStatus", "==", "upcoming"),
+              limit2(50)
+            );
+          }
+          try {
+            const snap = await getDocs2(qAppointments);
+            snap.forEach((d) => {
+              const data = d.data();
+              if (data) {
+                list.push({ id: d.id, ...data });
+              }
+            });
+            list.sort((a, b) => (/* @__PURE__ */ new Date(`${a.appointmentDate}T${a.appointmentTime}`)).getTime() - (/* @__PURE__ */ new Date(`${b.appointmentDate}T${b.appointmentTime}`)).getTime());
+          } catch (sdkErr) {
+            console.warn("[AI Executor] Client SDK get_follow_up_appointments error:", sdkErr?.message);
+          }
+        }
         result = {
           totalCount: list.length,
           appointments: list.map((a) => ({
@@ -2200,34 +2737,62 @@ async function executeAiToolCall(toolName, args, context) {
       // ----------------------------------------------------
       case "get_financial_summary": {
         const targetDate = args.date ? String(args.date).trim() : getTodayDateString();
-        const txCol = collection3(db, "clinic_transactions");
-        const qTx = query2(
-          txCol,
-          where2("organizationId", "==", clinicId),
-          where2("date", "==", targetDate),
-          limit2(100)
-        );
-        const snap = await getDocs2(qTx);
         let totalRevenue = 0;
         let totalCollected = 0;
         let totalRemaining = 0;
         const transactions = [];
-        snap.forEach((d) => {
-          const tx = d.data();
-          totalRevenue += Number(tx.totalAmount) || 0;
-          totalCollected += Number(tx.paidAmount) || 0;
-          totalRemaining += Number(tx.remainingAmount) || 0;
-          transactions.push({
-            id: d.id,
-            patientName: tx.patientName,
-            serviceName: tx.serviceName,
-            totalAmount: tx.totalAmount,
-            paidAmount: tx.paidAmount,
-            remainingAmount: tx.remainingAmount,
-            paymentStatus: tx.paymentStatus,
-            paymentMethod: tx.paymentMethod
-          });
-        });
+        if (context.idToken) {
+          try {
+            const restTxs = await getClinicTransactionsRest(clinicId, targetDate, context.idToken);
+            restTxs.forEach((tx) => {
+              totalRevenue += Number(tx.totalAmount) || 0;
+              totalCollected += Number(tx.paidAmount) || 0;
+              totalRemaining += Number(tx.remainingAmount) || 0;
+              transactions.push({
+                id: tx.id,
+                patientName: tx.patientName,
+                serviceName: tx.serviceName,
+                totalAmount: tx.totalAmount,
+                paidAmount: tx.paidAmount,
+                remainingAmount: tx.remainingAmount,
+                paymentStatus: tx.paymentStatus,
+                paymentMethod: tx.paymentMethod
+              });
+            });
+          } catch (restErr) {
+            console.warn("[AI Executor] REST get_financial_summary error:", restErr);
+          }
+        }
+        if (transactions.length === 0 && !context.idToken) {
+          const txCol = collection3(db, "clinic_transactions");
+          const qTx = query2(
+            txCol,
+            where2("organizationId", "==", clinicId),
+            where2("date", "==", targetDate),
+            limit2(100)
+          );
+          try {
+            const snap = await getDocs2(qTx);
+            snap.forEach((d) => {
+              const tx = d.data();
+              totalRevenue += Number(tx.totalAmount) || 0;
+              totalCollected += Number(tx.paidAmount) || 0;
+              totalRemaining += Number(tx.remainingAmount) || 0;
+              transactions.push({
+                id: d.id,
+                patientName: tx.patientName,
+                serviceName: tx.serviceName,
+                totalAmount: tx.totalAmount,
+                paidAmount: tx.paidAmount,
+                remainingAmount: tx.remainingAmount,
+                paymentStatus: tx.paymentStatus,
+                paymentMethod: tx.paymentMethod
+              });
+            });
+          } catch (sdkErr) {
+            console.warn("[AI Executor] Client SDK get_financial_summary error:", sdkErr?.message);
+          }
+        }
         result = {
           date: targetDate,
           totalRevenue,
@@ -2242,10 +2807,23 @@ async function executeAiToolCall(toolName, args, context) {
       // READ: get_active_tasks
       // ----------------------------------------------------
       case "get_active_tasks": {
-        const tasksCol = collection3(db, "doctors", clinicId, "aiTasks");
-        const snap = await getDocs2(query2(tasksCol, limit2(50)));
-        const tasks = [];
-        snap.forEach((d) => tasks.push({ id: d.id, ...d.data() }));
+        let tasks = [];
+        if (context.idToken) {
+          try {
+            tasks = await getClinicAiTasksRest(clinicId, context.idToken);
+          } catch (restErr) {
+            console.warn("[AI Executor] REST get_active_tasks error:", restErr);
+          }
+        }
+        if (tasks.length === 0 && !context.idToken) {
+          try {
+            const tasksCol = collection3(db, "doctors", clinicId, "aiTasks");
+            const snap = await getDocs2(query2(tasksCol, limit2(50)));
+            snap.forEach((d) => tasks.push({ id: d.id, ...d.data() }));
+          } catch (sdkErr) {
+            console.warn("[AI Executor] Client SDK get_active_tasks error:", sdkErr?.message);
+          }
+        }
         result = {
           count: tasks.length,
           tasks: tasks.map((t) => ({
@@ -2268,17 +2846,26 @@ async function executeAiToolCall(toolName, args, context) {
       // ----------------------------------------------------
       case "get_audit_logs": {
         const limitCount = Number(args.limit) || 20;
-        const logsCol = collection3(db, "doctors", clinicId, "aiAuditLogs");
-        const qLogs = query2(logsCol, orderBy2("timestamp", "desc"), limit2(limitCount));
-        let snap;
-        try {
-          snap = await getDocs2(qLogs);
-        } catch {
-          snap = await getDocs2(query2(logsCol, limit2(limitCount)));
+        let logs = [];
+        if (context.idToken) {
+          try {
+            logs = await getClinicAiAuditLogsRest(clinicId, limitCount, context.idToken);
+          } catch (restErr) {
+            console.warn("[AI Executor] REST get_audit_logs error:", restErr);
+          }
         }
-        const logs = [];
-        snap.forEach((d) => logs.push({ id: d.id, ...d.data() }));
-        logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        if (logs.length === 0 && !context.idToken) {
+          const logsCol = collection3(db, "doctors", clinicId, "aiAuditLogs");
+          const qLogs = query2(logsCol, orderBy2("timestamp", "desc"), limit2(limitCount));
+          let snap;
+          try {
+            snap = await getDocs2(qLogs);
+          } catch {
+            snap = await getDocs2(query2(logsCol, limit2(limitCount)));
+          }
+          snap.forEach((d) => logs.push({ id: d.id, ...d.data() }));
+          logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        }
         result = {
           count: logs.length,
           logs: logs.map((l) => ({
@@ -2304,19 +2891,33 @@ async function executeAiToolCall(toolName, args, context) {
         if (!name || !phone) {
           throw new Error("\u0627\u0633\u0645 \u0627\u0644\u0645\u0631\u064A\u0636 \u0648\u0631\u0642\u0645 \u0627\u0644\u0647\u0627\u062A\u0641 \u0645\u0637\u0644\u0648\u0628\u0627\u0646 \u0644\u0625\u062A\u0645\u0627\u0645 \u0627\u0644\u062D\u062C\u0632");
         }
-        const bookingRes = await bookPatient(
-          clinicId,
-          name,
-          phone,
-          actorUid,
-          "two_turns",
-          {
-            serviceId: "srv_consultation",
-            serviceName,
-            price,
-            visitType: "\u0643\u0634\u0641 \u062C\u062F\u064A\u062F"
-          }
-        );
+        let bookingRes;
+        if (context.idToken) {
+          bookingRes = await bookPatientTicketRest(
+            clinicId,
+            { name, phone, serviceName, price, actorUid },
+            context.idToken
+          );
+        } else {
+          const res = await bookPatient(
+            clinicId,
+            name,
+            phone,
+            actorUid,
+            "two_turns",
+            {
+              serviceId: "srv_consultation",
+              serviceName,
+              price,
+              visitType: "\u0643\u0634\u0641 \u062C\u062F\u064A\u062F"
+            }
+          );
+          bookingRes = {
+            patientId: res.patientId,
+            sequenceNumber: res.sequenceNumber,
+            bookingReference: res.bookingReference
+          };
+        }
         result = {
           success: true,
           ticketId: bookingRes.patientId,
@@ -2332,8 +2933,15 @@ async function executeAiToolCall(toolName, args, context) {
       // WRITE: call_next_patient
       // ----------------------------------------------------
       case "call_next_patient": {
-        const callRes = await callNextPatient(clinicId);
-        if (!callRes.calledPatient) {
+        let calledPatient = null;
+        if (context.idToken) {
+          const res = await callNextPatientRest(clinicId, context.idToken);
+          calledPatient = res.calledPatient;
+        } else {
+          const callRes = await callNextPatient(clinicId);
+          calledPatient = callRes.calledPatient;
+        }
+        if (!calledPatient) {
           result = {
             success: true,
             calledPatient: null,
@@ -2343,13 +2951,13 @@ async function executeAiToolCall(toolName, args, context) {
           result = {
             success: true,
             calledPatient: {
-              id: callRes.calledPatient.id,
-              name: callRes.calledPatient.name,
-              phone: callRes.calledPatient.phone,
-              sequenceNumber: callRes.calledPatient.sequenceNumber,
-              calledAt: callRes.calledPatient.calledAt
+              id: calledPatient.id,
+              name: calledPatient.name,
+              phone: calledPatient.phone,
+              sequenceNumber: calledPatient.sequenceNumber,
+              calledAt: calledPatient.calledAt
             },
-            message: `\u062A\u0645 \u0627\u0644\u0646\u062F\u0627\u0621 \u0639\u0644\u0649 \u0627\u0644\u0645\u0631\u064A\u0636 \u0627\u0644\u062A\u0627\u0644\u064A: [${callRes.calledPatient.name}] \u062F\u0648\u0631 \u0631\u0642\u0645 (${callRes.calledPatient.sequenceNumber}) \u0648\u062F\u062E\u0644 \u0627\u0644\u0639\u064A\u0627\u062F\u0629 \u0627\u0644\u0622\u0646.`
+            message: `\u062A\u0645 \u0627\u0644\u0646\u062F\u0627\u0621 \u0639\u0644\u0649 \u0627\u0644\u0645\u0631\u064A\u0636 \u0627\u0644\u062A\u0627\u0644\u064A: [${calledPatient.name}] \u062F\u0648\u0631 \u0631\u0642\u0645 (${calledPatient.sequenceNumber}) \u0648\u062F\u062E\u0644 \u0627\u0644\u0639\u064A\u0627\u062F\u0629 \u0627\u0644\u0622\u0646.`
           };
         }
         break;
@@ -2363,10 +2971,14 @@ async function executeAiToolCall(toolName, args, context) {
         if (!identifier || !newStatus) {
           throw new Error("\u0627\u0633\u0645 \u0627\u0644\u0645\u0631\u064A\u0636 \u0623\u0648 \u0645\u0639\u0631\u0641 \u0627\u0644\u062A\u0630\u0643\u0631\u0629 \u0648\u0627\u0644\u062D\u0627\u0644\u0629 \u0627\u0644\u062C\u062F\u064A\u062F\u0629 \u0645\u0637\u0644\u0648\u0628\u0627\u0646");
         }
-        const resolvedInQueue = await resolvePatientInTodayQueue(clinicId, identifier);
+        const resolvedInQueue = await resolvePatientInTodayQueue(clinicId, identifier, context.idToken);
         const targetTicketId = resolvedInQueue ? resolvedInQueue.id : identifier;
         const patientDisplayName = resolvedInQueue?.name || identifier;
-        await updatePatientStatus(clinicId, targetTicketId, newStatus);
+        if (context.idToken) {
+          await updatePatientStatusRest(clinicId, targetTicketId, newStatus, context.idToken);
+        } else {
+          await updatePatientStatus(clinicId, targetTicketId, newStatus);
+        }
         result = {
           success: true,
           patientRecordId: targetTicketId,
@@ -2819,10 +3431,16 @@ async function executeAiToolCall(toolName, args, context) {
 async function logAiAction(entry) {
   try {
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+    const sanitizedEntry = {};
+    Object.entries(entry).forEach(([k, v]) => {
+      if (v !== void 0) {
+        sanitizedEntry[k] = v;
+      }
+    });
     const logDoc = {
       id: `ai_log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       timestamp: nowIso,
-      ...entry
+      ...sanitizedEntry
     };
     const logsCol = collection3(db, "doctors", entry.clinicId, "aiAuditLogs");
     await addDoc3(logsCol, logDoc);
@@ -2862,22 +3480,27 @@ function getGemini() {
 var CANDIDATE_MODELS = [
   process.env.GEMINI_MODEL,
   "gemini-3.8-flash",
-  "gemini-flash-latest"
+  "gemini-flash-latest",
+  "gemini-3.1-flash-lite"
 ].filter(Boolean);
-async function generateWithCascade(ai, contents, config) {
+async function generateWithCascade(ai, contents, config, timeoutMs = 12e3) {
   let lastError = null;
   for (const model of CANDIDATE_MODELS) {
     try {
-      const response = await ai.models.generateContent({
+      const responsePromise = ai.models.generateContent({
         model,
         contents,
         config
       });
+      const timeoutPromise = new Promise(
+        (_, reject) => setTimeout(() => reject(new Error(`Timeout exceeding ${timeoutMs}ms on model ${model}`)), timeoutMs)
+      );
+      const response = await Promise.race([responsePromise, timeoutPromise]);
       return { modelUsed: model, response };
     } catch (err) {
       console.warn(`[Dory AI Model Cascade] Model ${model} encountered an issue:`, err?.status || err?.message);
       lastError = err;
-      if (err?.status === 503 || err?.status === 429 || err?.status === 404) {
+      if (err?.status === 503 || err?.status === 429 || err?.status === 404 || String(err?.message).includes("Timeout")) {
         continue;
       }
     }
@@ -2924,7 +3547,7 @@ var SYSTEM_INSTRUCTION = `
    - \u0644\u0627 \u062A\u0630\u0643\u0631 \u0625\u0637\u0644\u0627\u0642\u0627\u064B \u0623\u0633\u0645\u0627\u0621 \u0646\u0645\u0627\u0630\u062C \u0623\u0648 \u0634\u0631\u0643\u0627\u062A \u062A\u0642\u0646\u064A\u0629 \u062E\u0627\u0631\u062C\u064A\u0629 (\u0645\u062B\u0644 Gemini, OpenAI, GPT, Google, 2.5, 3.6). \u0647\u0648\u064A\u062A\u0643 \u0627\u0644\u062F\u0627\u0626\u0645\u0629 \u0648\u0627\u0644\u0645\u0648\u062D\u062F\u0629 \u0647\u064A: **\u0648\u0643\u064A\u0644 \u062F\u0648\u0631\u064A \u0627\u0644\u0630\u0643\u064A (Dory AI Agent)**.
 `;
 async function handleAiChatServer(params) {
-  const { clinicId, messages, userMember, isDoctorOwner, isSubscriptionActive, confirmedActionId, clientIp } = params;
+  const { clinicId, messages, userMember, isDoctorOwner, isSubscriptionActive, confirmedActionId, clientIp, idToken } = params;
   const userMessages = Array.isArray(messages) ? messages.filter((m) => m && m.role === "user") : [];
   const latestUserMessage = userMessages[userMessages.length - 1];
   const userText = (latestUserMessage?.content || "").trim();
@@ -2986,7 +3609,8 @@ async function handleAiChatServer(params) {
               isDoctorOwner,
               isSubscriptionActive,
               confirmedActionId,
-              clientIp
+              clientIp,
+              idToken
             });
             const tcItem = {
               id: toolResult.toolCallId,
@@ -3043,11 +3667,12 @@ async function handleAiChatServer(params) {
     isSubscriptionActive,
     confirmedActionId,
     clientIp,
+    idToken,
     geminiErrorMessage
   });
 }
 async function handleDeterministicIntent(params) {
-  const { clinicId, userText, userMember, isDoctorOwner, isSubscriptionActive, confirmedActionId, clientIp, geminiErrorMessage } = params;
+  const { clinicId, userText, userMember, isDoctorOwner, isSubscriptionActive, confirmedActionId, clientIp, idToken, geminiErrorMessage } = params;
   const t = userText.toLowerCase().trim();
   const toolCalls = [];
   const toolResults = [];
@@ -3058,7 +3683,8 @@ async function handleDeterministicIntent(params) {
       isDoctorOwner,
       isSubscriptionActive,
       confirmedActionId,
-      clientIp
+      clientIp,
+      idToken
     });
     toolCalls.push({
       id: res.toolCallId,
@@ -3079,7 +3705,8 @@ async function handleDeterministicIntent(params) {
       isDoctorOwner,
       isSubscriptionActive,
       confirmedActionId,
-      clientIp
+      clientIp,
+      idToken
     });
     toolCalls.push({
       id: res.toolCallId,
@@ -3284,8 +3911,8 @@ function generateDeterministicSummary(results) {
 
 // src/server/authVerify.ts
 import { doc as doc3, getDoc as getDoc3 } from "firebase/firestore";
-var FIREBASE_PROJECT_ID = "prefab-groove-502023-t4";
-var FIRESTORE_DATABASE_ID = "ai-studio-f8a934fa-e4dd-4561-8d66-6ad00154589f";
+var FIREBASE_PROJECT_ID2 = "prefab-groove-502023-t4";
+var FIRESTORE_DATABASE_ID2 = "ai-studio-f8a934fa-e4dd-4561-8d66-6ad00154589f";
 var ADMIN_EMAILS = [
   "bkay38757@gmail.com",
   "abdelftahmohamed745@gmail.com",
@@ -3313,7 +3940,7 @@ function parseFirestoreRestFields(fields) {
   }
   return result;
 }
-function serializeToFirestoreRest(data) {
+function serializeToFirestoreRest2(data) {
   const fields = {};
   for (const [key, val] of Object.entries(data)) {
     if (val === void 0) continue;
@@ -3343,7 +3970,7 @@ function serializeToFirestoreRest(data) {
     } else if (typeof val === "object") {
       fields[key] = {
         mapValue: {
-          fields: serializeToFirestoreRest(val)
+          fields: serializeToFirestoreRest2(val)
         }
       };
     }
@@ -3352,7 +3979,7 @@ function serializeToFirestoreRest(data) {
 }
 async function getDocRestWithToken(collectionName, docId, idToken) {
   try {
-    const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/${FIRESTORE_DATABASE_ID}/documents/${collectionName}/${docId}`;
+    const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID2}/databases/${FIRESTORE_DATABASE_ID2}/documents/${collectionName}/${docId}`;
     const headers = { "Content-Type": "application/json" };
     if (idToken) headers["Authorization"] = `Bearer ${idToken}`;
     const res = await fetch(url, { headers });
@@ -3368,13 +3995,13 @@ async function getDocRestWithToken(collectionName, docId, idToken) {
 async function updateDoctorDocAuthoritative(doctorId, updates, adminIdToken) {
   try {
     const fieldMask = Object.keys(updates).map((k) => `updateMask.fieldPaths=${encodeURIComponent(k)}`).join("&");
-    const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/${FIRESTORE_DATABASE_ID}/documents/doctors/${doctorId}?${fieldMask}`;
+    const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID2}/databases/${FIRESTORE_DATABASE_ID2}/documents/doctors/${doctorId}?${fieldMask}`;
     const headers = { "Content-Type": "application/json" };
     if (adminIdToken) headers["Authorization"] = `Bearer ${adminIdToken}`;
     const res = await fetch(url, {
       method: "PATCH",
       headers,
-      body: JSON.stringify({ fields: serializeToFirestoreRest(updates) })
+      body: JSON.stringify({ fields: serializeToFirestoreRest2(updates) })
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -3389,7 +4016,7 @@ async function updateDoctorDocAuthoritative(doctorId, updates, adminIdToken) {
 }
 async function deleteDoctorDocAuthoritative(doctorId, adminIdToken) {
   try {
-    const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/${FIRESTORE_DATABASE_ID}/documents/doctors/${doctorId}`;
+    const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID2}/databases/${FIRESTORE_DATABASE_ID2}/documents/doctors/${doctorId}`;
     const headers = {};
     if (adminIdToken) headers["Authorization"] = `Bearer ${adminIdToken}`;
     const res = await fetch(url, { method: "DELETE", headers });

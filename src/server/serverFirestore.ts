@@ -3,12 +3,12 @@ import {
   ClinicTransaction,
   FollowUpAppointment,
   PatientMedicalFile
-} from '../types';
+} from '../types.ts';
 import {
   AiAutonomousTask,
   AiAuditLog
-} from '../types/aiAgent';
-import { normalizePhoneNumber } from '../services/firebaseService';
+} from '../types/aiAgent.ts';
+import { normalizePhoneNumber } from '../services/firebaseService.ts';
 
 const FIREBASE_PROJECT_ID = 'prefab-groove-502023-t4';
 const FIRESTORE_DATABASE_ID = 'ai-studio-f8a934fa-e4dd-4561-8d66-6ad00154589f';
@@ -560,3 +560,173 @@ export async function searchClinicPatientsRest(
 
   return results;
 }
+
+/**
+ * 7. Resolve Patient in Today's Queue via REST
+ */
+export async function resolvePatientInQueueRest(
+  clinicId: string,
+  identifier: string,
+  idToken?: string
+): Promise<PatientRecord | null> {
+  if (!identifier || typeof identifier !== 'string') return null;
+  const cleanId = identifier.trim().toLowerCase();
+  if (!cleanId) return null;
+
+  const today = new Date().toISOString().split('T')[0];
+  const patients = await getClinicQueuePatientsRest(clinicId, today, idToken);
+  if (!patients || patients.length === 0) return null;
+
+  const cleanPhone = normalizePhoneNumber(cleanId);
+  if (cleanPhone) {
+    const byPhone = patients.find((p) => normalizePhoneNumber(p.phone) === cleanPhone);
+    if (byPhone) return byPhone;
+  }
+
+  const seqNum = Number(cleanId);
+  if (!isNaN(seqNum) && seqNum > 0) {
+    const bySeq = patients.find((p) => Number(p.sequenceNumber) === seqNum);
+    if (bySeq) return bySeq;
+  }
+
+  // Exact doc ID match
+  const byId = patients.find((p) => p.id === identifier.trim());
+  if (byId) return byId;
+
+  // Name match
+  const byNameExact = patients.find((p) => (p.name || '').trim().toLowerCase() === cleanId);
+  if (byNameExact) return byNameExact;
+
+  const byNamePartial = patients.filter((p) => (p.name || '').toLowerCase().includes(cleanId));
+  if (byNamePartial.length > 0) {
+    const active = byNamePartial.find((p) => p.status === 'called' || p.status === 'waiting');
+    return active || byNamePartial[0];
+  }
+
+  return null;
+}
+
+/**
+ * 8. Call Next Patient via REST API
+ */
+export async function callNextPatientRest(
+  clinicId: string,
+  idToken?: string
+): Promise<{ calledPatient: PatientRecord | null }> {
+  const today = new Date().toISOString().split('T')[0];
+  const nowIso = new Date().toISOString();
+
+  const patients = await getClinicQueuePatientsRest(clinicId, today, idToken);
+  patients.sort((a, b) => (Number(a.sequenceNumber) || 0) - (Number(b.sequenceNumber) || 0));
+
+  // 1. Mark existing 'called' patient as 'done'
+  const currentCalled = patients.find((p) => p.status === 'called');
+  if (currentCalled && currentCalled.id) {
+    await patchDocRest(
+      `queues/${clinicId}/patients`,
+      currentCalled.id,
+      {
+        status: 'done',
+        doneAt: nowIso,
+        updatedAt: nowIso
+      },
+      idToken
+    );
+  }
+
+  // 2. Find next 'waiting' patient
+  const nextWaiting = patients.find((p) => p.status === 'waiting');
+  if (!nextWaiting || !nextWaiting.id) {
+    return { calledPatient: null };
+  }
+
+  // 3. Mark next patient as 'called'
+  const success = await patchDocRest(
+    `queues/${clinicId}/patients`,
+    nextWaiting.id,
+    {
+      status: 'called',
+      calledAt: nowIso,
+      updatedAt: nowIso
+    },
+    idToken
+  );
+
+  if (success) {
+    return {
+      calledPatient: {
+        ...nextWaiting,
+        status: 'called',
+        calledAt: nowIso
+      }
+    };
+  }
+
+  return { calledPatient: null };
+}
+
+/**
+ * 9. Update Patient Ticket Status via REST API
+ */
+export async function updatePatientStatusRest(
+  clinicId: string,
+  ticketId: string,
+  newStatus: string,
+  idToken?: string
+): Promise<boolean> {
+  const nowIso = new Date().toISOString();
+  const updates: Record<string, any> = {
+    status: newStatus,
+    updatedAt: nowIso
+  };
+
+  if (newStatus === 'done') updates.doneAt = nowIso;
+  if (newStatus === 'called') updates.calledAt = nowIso;
+  if (newStatus === 'cancelled') updates.cancelledAt = nowIso;
+
+  return await patchDocRest(`queues/${clinicId}/patients`, ticketId, updates, idToken);
+}
+
+/**
+ * 10. Book Patient Ticket via REST API
+ */
+export async function bookPatientTicketRest(
+  clinicId: string,
+  data: {
+    name: string;
+    phone: string;
+    serviceName?: string;
+    price?: number;
+    actorUid?: string;
+  },
+  idToken?: string
+): Promise<{ patientId: string; sequenceNumber: number; bookingReference: string }> {
+  const today = new Date().toISOString().split('T')[0];
+  const nowIso = new Date().toISOString();
+
+  const patients = await getClinicQueuePatientsRest(clinicId, today, idToken);
+  const sequenceNumber = patients.length + 1;
+  const bookingReference = `BK-${Date.now().toString(36).toUpperCase().slice(-4)}`;
+
+  const newTicketData = {
+    name: data.name,
+    phone: data.phone,
+    date: today,
+    sequenceNumber,
+    bookingReference,
+    status: 'waiting',
+    serviceName: data.serviceName || 'كشف جديد',
+    price: data.price || 200,
+    createdBy: data.actorUid || 'AI_AGENT',
+    createdAt: nowIso,
+    updatedAt: nowIso
+  };
+
+  const created = await createDocRest(`queues/${clinicId}/patients`, newTicketData, undefined, idToken);
+  return {
+    patientId: created?.id || `ticket_${Date.now()}`,
+    sequenceNumber,
+    bookingReference
+  };
+}
+

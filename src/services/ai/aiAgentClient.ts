@@ -6,8 +6,8 @@ import {
   AiAuditLog,
   AiToolName,
   AiConversation
-} from '../../types/aiAgent';
-import { ClinicMember } from '../../types';
+} from '../../types/aiAgent.ts';
+import { ClinicMember } from '../../types.ts';
 import { collection, getDocs, query, orderBy, limit, doc, addDoc, updateDoc, setDoc, deleteDoc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../../firebase/config';
 import { dispatchClinicEvent, ClinicEventPayload } from './aiEventEngine';
