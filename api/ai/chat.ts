@@ -1,5 +1,4 @@
-import { handleAiChatServer } from "../../src/server/aiAgentServer.ts";
-import { verifyFirebaseIdToken, verifyClinicAccess } from "../../src/server/authVerify.ts";
+import { handleAiChatServer, verifyFirebaseIdToken, verifyClinicAccess } from "../../src/server/serverBundle.js";
 
 export default async function handler(req: any, res: any) {
   res.setHeader("Content-Type", "application/json");

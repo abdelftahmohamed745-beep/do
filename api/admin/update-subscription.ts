@@ -1,5 +1,4 @@
-import { verifyFirebaseIdToken, updateDoctorDocAuthoritative } from "../../src/server/authVerify.ts";
-import { db } from "../../src/firebase/config.ts";
+import { verifyFirebaseIdToken, updateDoctorDocAuthoritative, db } from "../../src/server/serverBundle.js";
 import { doc, updateDoc } from "firebase/firestore";
 
 export default async function handler(req: any, res: any) {

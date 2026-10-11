@@ -1,5 +1,4 @@
-import { executeAiToolCall } from "../../src/services/ai/aiToolExecutor.ts";
-import { verifyFirebaseIdToken, verifyClinicAccess } from "../../src/server/authVerify.ts";
+import { executeAiToolCall, verifyFirebaseIdToken, verifyClinicAccess } from "../../src/server/serverBundle.js";
 
 export default async function handler(req: any, res: any) {
   res.setHeader("Content-Type", "application/json");
