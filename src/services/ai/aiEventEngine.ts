@@ -7,6 +7,7 @@ import {
   AiAuditLog
 } from '../../types/aiAgent';
 import { getTodayDateString } from '../firebaseService';
+import { addInAppNotification } from '../fcmService';
 
 export interface ClinicEventPayload {
   clinicId: string;
@@ -24,6 +25,20 @@ export interface ClinicEventPayload {
 
 type EventListener = (event: ClinicEventPayload) => void;
 const listeners: Set<EventListener> = new Set();
+
+// Idempotency execution map: dedupeKey -> executionTimestamp
+const recentExecutionTracker = new Map<string, number>();
+const DEDUPLICATION_WINDOW_MS = 60000; // 60-second window to prevent duplicate execution
+
+export function clearExecutionDeduplicationCache(): void {
+  recentExecutionTracker.clear();
+}
+
+export function isEventRecentlyExecuted(dedupeKey: string): boolean {
+  const lastTime = recentExecutionTracker.get(dedupeKey);
+  if (!lastTime) return false;
+  return Date.now() - lastTime < DEDUPLICATION_WINDOW_MS;
+}
 
 /**
  * Register a listener for real-time clinic events
@@ -77,15 +92,17 @@ async function evaluateAutonomousTasksForEvent(event: ClinicEventPayload): Promi
     let triggerReason = '';
 
     // Check Event Trigger
-    if (task.triggerType === 'EVENT' && task.triggerConfig?.event === eventType) {
-      shouldTrigger = true;
-      triggerReason = `حدث النظام: ${eventType}`;
+    if (task.triggerType === 'EVENT') {
+      if (task.triggerConfig?.event === eventType) {
+        shouldTrigger = true;
+        triggerReason = `حدث النظام: ${eventType}`;
+      }
     }
 
-    // Check Condition Trigger (e.g. wait time exceeded or high balance)
+    // Check Condition Trigger (wait time, high balance, capacity, no-show)
     if (task.triggerType === 'CONDITION') {
       const condition = task.triggerConfig?.condition;
-      const threshold = task.triggerConfig?.threshold || 0;
+      const threshold = Number(task.triggerConfig?.threshold || 0);
 
       if (condition === 'QUEUE_WAIT_TIME_EXCEEDED' && event.waitingMinutes !== undefined) {
         if (event.waitingMinutes >= threshold) {
@@ -97,10 +114,28 @@ async function evaluateAutonomousTasksForEvent(event: ClinicEventPayload): Promi
           shouldTrigger = true;
           triggerReason = `المبلغ المتبقي (${event.amount} ج) تجاوز الحد المسموح (${threshold} ج)`;
         }
+      } else if (condition === 'NO_SHOW_DETECTED' && (eventType === 'NO_SHOW_DETECTED' || event.metadata?.isNoShow)) {
+        shouldTrigger = true;
+        triggerReason = `تم رصد تخلف المريض (${event.patientName || 'المريض'}) عن الحضور`;
+      } else if (condition === 'DAILY_CAPACITY_REACHED' && event.metadata?.queueCount !== undefined) {
+        if (Number(event.metadata.queueCount) >= threshold) {
+          shouldTrigger = true;
+          triggerReason = `بلغ إجمالي المسجلين بالطابور (${event.metadata.queueCount}) الحد الأقصى للطاقة الاستيعابية (${threshold})`;
+        }
       }
     }
 
     if (shouldTrigger) {
+      // Idempotency / Duplicate Execution Guard
+      const targetEntity = event.ticketId || event.patientId || (event.amount !== undefined ? `amt_${event.amount}` : (event.waitingMinutes !== undefined ? `wait_${event.waitingMinutes}` : 'general'));
+      const dedupeKey = `${task.id}:${event.eventType || 'CONDITION'}:${targetEntity}`;
+
+      if (isEventRecentlyExecuted(dedupeKey)) {
+        console.log(`[Event Engine] Duplicate trigger prevented for task [${task.id}] - already executed recently.`);
+        continue;
+      }
+      recentExecutionTracker.set(dedupeKey, Date.now());
+
       // Execute the Autonomous Action
       let executionLog = '';
       let isSuccess = true;
@@ -109,19 +144,86 @@ async function evaluateAutonomousTasksForEvent(event: ClinicEventPayload): Promi
         switch (task.actionType) {
           case 'ALERT_STAFF':
             executionLog = `[تنبيه الفريق]: ${task.actionConfig?.messageTemplate || 'تنبيه آلي من دوري'} - ${triggerReason}`;
+            try {
+              await addInAppNotification(
+                clinicId,
+                task.title,
+                task.actionConfig?.messageTemplate || `${task.title} - ${triggerReason}`,
+                'system',
+                event.ticketId,
+                clinicId
+              );
+            } catch (notifErr) {
+              console.warn('[Event Engine] In-app notification notice:', notifErr);
+            }
             break;
+
           case 'SEND_REMINDER':
             executionLog = `[تذكير مريض]: تم تحضير رسالة تذكير للمريض ${event.patientName || ''} - ${triggerReason}`;
+            try {
+              await addInAppNotification(
+                clinicId,
+                `تذكير مريض: ${event.patientName || ''}`,
+                task.actionConfig?.messageTemplate || `تذكير للمريض بموعده أو المتابعة: ${triggerReason}`,
+                'system',
+                event.ticketId,
+                clinicId
+              );
+            } catch {}
             break;
+
           case 'FLAG_HIGH_BALANCE':
             executionLog = `[إشارة تدقيق مالي]: تم تصنيف حساب المريض ${event.patientName || ''} بمستحقات مالية مرتفعة (${event.amount || 0} ج)`;
+            if (event.ticketId) {
+              try {
+                const ticketRef = doc(db, 'queues', clinicId, 'patients', event.ticketId);
+                await updateDoc(ticketRef, {
+                  hasHighBalanceAlert: true,
+                  highBalanceAmount: event.amount || 0
+                });
+              } catch (flagErr) {
+                console.warn('[Event Engine] Flag high balance write notice:', flagErr);
+              }
+            }
             break;
+
           case 'AUTO_CALL_NEXT':
-            executionLog = `[نداء آلي]: جاهزية النداء على المريض التالي - ${triggerReason}`;
+            executionLog = `[نداء آلي]: تم تفعيل النداء التلقائي للمريض التالي - ${triggerReason}`;
+            try {
+              await addInAppNotification(
+                clinicId,
+                'نداء آلي على المريض التالي',
+                `قام وكيل دوري الذاتي بطلب نداء المريض التالي في الطابور: ${triggerReason}`,
+                'system'
+              );
+            } catch {}
             break;
+
           case 'GENERATE_SESSION_REPORT':
-            executionLog = `[تقرير اليومية]: تم إصدار ملخص نهاية الوردية تلقائياً`;
+            executionLog = `[تقرير اليومية]: تم إصدار وتوثيق ملخص نهاية الوردية تلقائياً`;
+            try {
+              await addInAppNotification(
+                clinicId,
+                'تقرير اليومية الآلي',
+                `تم إصدار وتوثيق ملخص الوردية تلقائياً بواسطة وكيل دوري الذاتي`,
+                'system'
+              );
+            } catch {}
             break;
+
+          case 'SCHEDULE_REVISIT':
+            executionLog = `[جدولة إعادة كشف]: تم اقتراح موعد متابعة للمريض ${event.patientName || ''}`;
+            try {
+              await addInAppNotification(
+                clinicId,
+                'مقترح موعد استشارة',
+                `يوصي وكيل دوري بتسجيل موعد متابعة للمريض ${event.patientName || ''}: ${triggerReason}`,
+                'system',
+                event.ticketId
+              );
+            } catch {}
+            break;
+
           default:
             executionLog = `تم تنفيذ الإجراء الآلي (${task.actionType}): ${triggerReason}`;
         }
@@ -139,9 +241,9 @@ async function evaluateAutonomousTasksForEvent(event: ClinicEventPayload): Promi
           lastExecutionLog: executionLog
         });
 
-        // Write Audit Log
+        // Write Audit Log with stable ID
         const auditLog: AiAuditLog = {
-          id: `ai_auto_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          id: `ai_auto_${task.id}_${Date.now()}`,
           clinicId,
           actorUid: 'SYSTEM_AUTONOMOUS_AGENT',
           actorName: `وكيل دوري الذاتي (${task.title})`,
@@ -184,15 +286,16 @@ export async function checkQueueConditions(clinicId: string): Promise<void> {
       if (p.createdAt) {
         const createdTime = new Date(p.createdAt).getTime();
         const waitingMinutes = Math.floor((now - createdTime) / 60000);
-        if (waitingMinutes > 30) {
+        if (waitingMinutes > 0) {
           dispatchClinicEvent({
             clinicId,
-            eventType: 'PATIENT_REGISTERED',
+            eventType: 'PATIENT_CALLED',
             patientId: p.patientId || d.id,
             patientName: p.name,
             patientPhone: p.phone,
             ticketId: d.id,
-            waitingMinutes
+            waitingMinutes,
+            metadata: { isWaitingCheck: true, waitingMinutes }
           }).catch(console.error);
         }
       }

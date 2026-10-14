@@ -34,14 +34,19 @@ const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 const auth = getAuth(app);
 auth.languageCode = 'ar';
 
-// Initialize Firestore with persistentLocalCache for ultra-fast reads and offline resilience
+// Initialize Firestore with persistentLocalCache in browser for ultra-fast reads and offline resilience
 const databaseId = firebaseConfigData.firestoreDatabaseId || "(default)";
 let db: ReturnType<typeof getFirestore>;
 
+const isBrowser = typeof window !== 'undefined';
 try {
-  db = initializeFirestore(app, {
-    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
-  }, databaseId);
+  db = initializeFirestore(
+    app,
+    isBrowser
+      ? { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }
+      : {},
+    databaseId
+  );
 } catch {
   db = getFirestore(app, databaseId);
 }

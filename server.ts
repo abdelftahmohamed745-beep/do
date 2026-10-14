@@ -88,6 +88,7 @@ async function startServer() {
       const userMember = accessCheck.userMember;
 
       const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown_ip";
+      const idToken = authHeader?.startsWith("Bearer ") ? authHeader.substring(7).trim() : undefined;
 
       const outcome = await handleAiChatServer({
         clinicId,
@@ -96,12 +97,20 @@ async function startServer() {
         isDoctorOwner,
         isSubscriptionActive,
         confirmedActionId,
-        clientIp
+        clientIp,
+        idToken
       });
 
       return res.status(200).json(outcome);
     } catch (error: any) {
-      const message = error instanceof Error ? error.message : String(error || "خطأ غير متوقع");
+      const rawMessage = error instanceof Error
+        ? error.message
+        : (typeof error === 'string'
+          ? error
+          : (typeof error?.message === 'string' ? error.message : (typeof error?.error === 'string' ? error.error : 'خطأ غير متوقع')));
+      const message = (rawMessage && rawMessage !== '[object Object]')
+        ? rawMessage
+        : 'خطأ غير متوقع في معالجة طلب الذكاء الاصطناعي';
       console.error("[AI Chat Route Error] Unhandled failure:", error);
       return res.status(500).json({
         reply: `حدث خطأ أثناء معالجة الطلب: ${message}`,
@@ -152,6 +161,7 @@ async function startServer() {
       const userMember = accessCheck.userMember;
 
       const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown_ip";
+      const idToken = authHeader?.startsWith("Bearer ") ? authHeader.substring(7).trim() : undefined;
 
       const toolResult = await executeAiToolCall(toolName, args || {}, {
         clinicId,
@@ -159,7 +169,8 @@ async function startServer() {
         isDoctorOwner,
         isSubscriptionActive,
         confirmedActionId,
-        clientIp
+        clientIp,
+        idToken
       });
 
       return res.status(200).json(toolResult);

@@ -179,11 +179,14 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
     return () => unsubscribe();
   }, [doctor.uid, activeDailySession?.date]);
 
+  const [updatingPatientId, setUpdatingPatientId] = useState<string | null>(null);
+
   // Derived Statistics
   const waitingPatients = patients.filter(p => p.status === 'waiting');
   const calledPatient = patients.find(p => p.status === 'called');
   const donePatients = patients.filter(p => p.status === 'done');
   const cancelledPatients = patients.filter(p => p.status === 'cancelled');
+  const noShowPatients = patients.filter(p => p.status === 'no_show');
 
   // Filtered Queue
   const displayedPatients = patients.filter(p => {
@@ -254,6 +257,9 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
 
   // Action: Single Patient Status Change (Optimistic UI)
   const handleStatusChange = async (patient: PatientRecord, newStatus: PatientStatus) => {
+    if (updatingPatientId === patient.id || patient.status === newStatus) return;
+    setUpdatingPatientId(patient.id);
+
     const prevPatients = patients;
     const nowIso = new Date().toISOString();
 
@@ -281,10 +287,12 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
       onShowToast(`تم إنهاء كشف ${patient.name}`, "تم إكمال الكشف بنجاح", "success");
     } else if (newStatus === 'cancelled') {
       onShowToast(`تم إلغاء حجز ${patient.name}`, "تمت إزالته من الطابور النشط", "warning");
+    } else if (newStatus === 'waiting') {
+      onShowToast(`تمت إعادة ${patient.name} للطابور`, `المريض في قائمة الانتظار بدور رقم #${patient.sequenceNumber}`, "info");
     }
 
     try {
-      await updatePatientStatus(doctor.uid, patient.id, newStatus);
+      await updatePatientStatus(doctor.uid, patient.id, newStatus, patient.status);
       if (newStatus === 'called' || newStatus === 'done') {
         dispatchClinicEvent({
           clinicId: doctor.uid,
@@ -295,10 +303,13 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
           ticketId: patient.id
         }).catch(console.error);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Status update error:", err);
       setPatients(prevPatients); // Revert on failure
-      onShowToast("خطأ في التحديث", "تعذر تغيير حالة الحجز في قاعدة البيانات", "error");
+      const errorMsg = err?.message || "تعذر تغيير حالة الحجز في قاعدة البيانات";
+      onShowToast("خطأ في التحديث", errorMsg, "error");
+    } finally {
+      setUpdatingPatientId(null);
     }
   };
 
@@ -869,6 +880,16 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
                     مكتمل ({donePatients.length})
                   </button>
                   <button
+                    onClick={() => setFilterStatus('no_show')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition shrink-0 cursor-pointer min-h-[36px] ${
+                      filterStatus === 'no_show'
+                        ? 'bg-rose-600 text-white shadow-2xs'
+                        : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'
+                    }`}
+                  >
+                    غائب ({noShowPatients.length})
+                  </button>
+                  <button
                     onClick={() => setFilterStatus('cancelled')}
                     className={`px-3 py-1.5 rounded-lg text-xs font-bold transition shrink-0 cursor-pointer min-h-[36px] ${
                       filterStatus === 'cancelled'
@@ -958,6 +979,7 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
                       const isWaiting = patient.status === 'waiting';
                       const isDone = patient.status === 'done';
                       const isCancelled = patient.status === 'cancelled';
+                      const isNoShow = patient.status === 'no_show';
 
                       return (
                         <motion.div
@@ -972,6 +994,8 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
                               ? 'bg-white border-slate-200 hover:border-amber-300 shadow-2xs'
                               : isDone
                               ? 'bg-white border-slate-200/60 opacity-85'
+                              : isNoShow
+                              ? 'bg-rose-50/40 border-rose-200 shadow-2xs'
                               : 'bg-slate-50/80 border-slate-200 opacity-60'
                           }`}
                         >
@@ -988,7 +1012,8 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
                               className={`w-10 h-10 sm:w-11 sm:h-11 rounded-xl font-black text-sm sm:text-base flex items-center justify-center shrink-0 shadow-2xs font-['Tajawal',sans-serif] cursor-pointer hover:opacity-90 transition ${
                                 isCalled ? 'bg-[#0d5c58] text-white animate-pulse' :
                                 isWaiting ? 'bg-[#d97706] text-white' :
-                                isDone ? 'bg-slate-700 text-white' : 'bg-slate-400 text-white'
+                                isDone ? 'bg-slate-700 text-white' :
+                                isNoShow ? 'bg-rose-600 text-white' : 'bg-slate-400 text-white'
                               }`}
                               title="فتح الملف الطبي للمريض"
                             >
@@ -1013,11 +1038,14 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
                                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
                                   isCalled ? 'bg-teal-100 text-teal-900 border border-teal-200' :
                                   isWaiting ? 'bg-amber-100 text-amber-900 border border-amber-200' :
-                                  isDone ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                  isDone ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' :
+                                  isNoShow ? 'bg-rose-50 text-rose-800 border border-rose-200' :
+                                  'bg-slate-100 text-slate-600 border border-slate-200'
                                 }`}>
                                   {isCalled ? 'داخل الكشف الآن' :
                                    isWaiting ? 'في الانتظار' :
-                                   isDone ? 'تم الكشف' : 'ملغي'}
+                                   isDone ? 'تم الكشف' :
+                                   isNoShow ? 'غائب (لم يحضر)' : 'ملغي'}
                                 </span>
 
                                 {/* Medical Order Badge */}
@@ -1046,20 +1074,23 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
                           {/* Right side actions */}
                           <div className="grid grid-cols-3 sm:flex sm:flex-wrap items-center gap-1.5 w-full lg:w-auto justify-start lg:justify-end border-t lg:border-0 pt-2 lg:pt-0 border-slate-100">
                             {/* 1. Primary Action */}
-                            {isWaiting && (
+                            {(isWaiting || isNoShow) && (
                               <button
                                 onClick={() => handleStatusChange(patient, 'called')}
-                                className="flex items-center justify-center gap-1 px-3 py-1.5 min-h-[36px] bg-[#d97706] hover:bg-amber-600 text-white font-black text-xs rounded-lg transition shadow-2xs active:scale-95 cursor-pointer whitespace-nowrap"
+                                disabled={updatingPatientId === patient.id}
+                                className="flex items-center justify-center gap-1 px-3 py-1.5 min-h-[36px] bg-[#d97706] hover:bg-amber-600 text-white font-black text-xs rounded-lg transition shadow-2xs active:scale-95 cursor-pointer whitespace-nowrap disabled:opacity-50"
+                                title={isNoShow ? 'استدعاء المريض الغائب لدخول الكشف فور حضوره' : 'استدعاء المريض'}
                               >
                                 <Volume2 className="w-3.5 h-3.5" />
-                                <span>استدعاء</span>
+                                <span>{isNoShow ? 'استدعاء (حضر)' : 'استدعاء'}</span>
                               </button>
                             )}
 
                             {(isWaiting || isCalled) && (
                               <button
                                 onClick={() => handleStatusChange(patient, 'done')}
-                                className="flex items-center justify-center gap-1 px-3 py-1.5 min-h-[36px] bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg transition shadow-2xs active:scale-95 cursor-pointer whitespace-nowrap"
+                                disabled={updatingPatientId === patient.id}
+                                className="flex items-center justify-center gap-1 px-3 py-1.5 min-h-[36px] bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg transition shadow-2xs active:scale-95 cursor-pointer whitespace-nowrap disabled:opacity-50"
                               >
                                 <CheckCircle2 className="w-3.5 h-3.5" />
                                 <span>تم الكشف</span>
@@ -1134,10 +1165,12 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
                             </button>
 
                             {/* 7. Re-queue */}
-                            {(isDone || isCancelled) && (
+                            {(isDone || isCancelled || isNoShow) && (
                               <button
                                 onClick={() => handleStatusChange(patient, 'waiting')}
-                                className="flex items-center justify-center gap-1 px-2.5 py-1.5 min-h-[36px] bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition cursor-pointer whitespace-nowrap"
+                                disabled={updatingPatientId === patient.id}
+                                className="flex items-center justify-center gap-1 px-2.5 py-1.5 min-h-[36px] bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition cursor-pointer whitespace-nowrap disabled:opacity-50"
+                                title={isNoShow ? 'إعادة المريض الغائب إلى قائمة الانتظار' : 'إعادة المريض إلى الطابور'}
                               >
                                 <RotateCcw className="w-3.5 h-3.5" />
                                 <span>إعادة</span>
@@ -1145,10 +1178,11 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
                             )}
 
                             {/* 8. Cancel */}
-                            {(isWaiting || isCalled) && (
+                            {(isWaiting || isCalled || isNoShow) && (
                               <button
                                 onClick={() => handleStatusChange(patient, 'cancelled')}
-                                className="flex items-center justify-center gap-1 px-2 py-1.5 min-h-[36px] bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs rounded-lg transition cursor-pointer whitespace-nowrap active:scale-95"
+                                disabled={updatingPatientId === patient.id}
+                                className="flex items-center justify-center gap-1 px-2 py-1.5 min-h-[36px] bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs rounded-lg transition cursor-pointer whitespace-nowrap active:scale-95 disabled:opacity-50"
                                 title="إلغاء حجز المريض"
                               >
                                 <X className="w-3.5 h-3.5" />
@@ -1159,15 +1193,22 @@ export const DoctorDashboard: React.FC<DoctorDashboardProps> = ({
                             {/* 9. No-show */}
                             {(isWaiting || isCalled) && (
                               <button
+                                disabled={updatingPatientId === patient.id}
                                 onClick={async () => {
+                                  if (updatingPatientId === patient.id) return;
+                                  setUpdatingPatientId(patient.id);
                                   try {
-                                    await markQueuePatientNoShow(patient.id, doctor.uid);
-                                    onShowToast('تم تسجيل تغيب المريض (No-show)', `تم تحويل حالة ${patient.name}`, 'info');
+                                    await markQueuePatientNoShow(doctor.uid, patient.id);
+                                    onShowToast('تم تسجيل تغيب المريض (No-show)', `تم تحويل حالة ${patient.name} إلى غائب`, 'info');
                                   } catch (err: any) {
-                                    onShowToast('فشل التحديث', err?.message, 'error');
+                                    console.error('markQueuePatientNoShow error:', err);
+                                    const errMsg = err?.message || 'تعذر تسجيل حالة الغياب في قاعدة البيانات';
+                                    onShowToast('فشل التحديث', errMsg, 'error');
+                                  } finally {
+                                    setUpdatingPatientId(null);
                                   }
                                 }}
-                                className="flex items-center justify-center gap-1 px-2 py-1.5 min-h-[36px] bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition cursor-pointer whitespace-nowrap active:scale-95"
+                                className="flex items-center justify-center gap-1 px-2 py-1.5 min-h-[36px] bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition cursor-pointer whitespace-nowrap active:scale-95 disabled:opacity-50"
                                 title="لم يحضر (No-show)"
                               >
                                 <Clock className="w-3.5 h-3.5" />

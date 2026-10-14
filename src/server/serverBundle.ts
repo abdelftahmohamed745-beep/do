@@ -1,5 +1,6 @@
-import { handleAiChatServer } from './aiAgentServer.ts';
+import { handleAiChatServer, classifyProviderError } from './aiAgentServer.ts';
 import { executeAiToolCall } from '../services/ai/aiToolExecutor.ts';
+import { validateAndNormalizeTask, sanitizeFirestorePayload } from '../services/ai/taskValidation.ts';
 import {
   verifyFirebaseIdToken,
   verifyClinicAccess,
@@ -11,7 +12,10 @@ import { db } from '../firebase/config.ts';
 
 export {
   handleAiChatServer,
+  classifyProviderError,
   executeAiToolCall,
+  validateAndNormalizeTask,
+  sanitizeFirestorePayload,
   verifyFirebaseIdToken,
   verifyClinicAccess,
   updateDoctorDocAuthoritative,

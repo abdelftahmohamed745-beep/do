@@ -1047,14 +1047,22 @@ export async function updateDoctorSettings(doctorId: string, updates: Partial<Do
 
   // Validate URLs if present
   if (safeUpdates.photoUrl && !isValidUrl(safeUpdates.photoUrl)) {
-    throw new Error("رابط الصورة غير صالحة أو غير آمنة (يجب أن تبدأ بـ https://)");
+    throw new Error("رابط الصورة غير صالح أو غير آمن (يجب أن يبدأ بـ https:// أو يكون صورة مدعومة)");
+  }
+  if (Array.isArray(safeUpdates.clinicPhotos)) {
+    for (const photo of safeUpdates.clinicPhotos) {
+      if (photo && !isValidUrl(photo)) {
+        throw new Error("أحد روابط صور العيادة غير صالح أو غير آمن");
+      }
+    }
   }
 
+  const cleanUpdates = removeUndefinedFields(safeUpdates);
   const docRef = doc(db, "doctors", doctorId);
-  await updateDoc(docRef, safeUpdates);
+  await updateDoc(docRef, cleanUpdates);
 
   // Write Audit Log
-  writeAuditLog("UPDATE_DOCTOR_SETTINGS", doctorId, doctorId, { updatedFields: Object.keys(safeUpdates) });
+  writeAuditLog("UPDATE_DOCTOR_SETTINGS", doctorId, doctorId, { updatedFields: Object.keys(cleanUpdates) });
 }
 
 // Check for active duplicate booking for phone number today
@@ -1482,8 +1490,27 @@ export async function callNextPatient(doctorId: string): Promise<{ calledPatient
 export async function updatePatientStatus(
   doctorId: string,
   patientId: string,
-  newStatus: PatientStatus
+  newStatus: PatientStatus,
+  currentStatusKnown?: PatientStatus
 ): Promise<void> {
+  const ticketRef = doc(db, "queues", doctorId, "patients", patientId);
+
+  // Check existence and resolve previous status
+  let previousStatus: PatientStatus = currentStatusKnown || 'waiting';
+  try {
+    const snap = await getDoc(ticketRef);
+    if (!snap.exists()) {
+      throw new Error("سجل المريض غير موجود في طابور اليوم أو تم أرشفته مسبقاً.");
+    }
+    const data = snap.data() as PatientRecord;
+    previousStatus = currentStatusKnown || data.status;
+  } catch (readErr: any) {
+    if (readErr.message?.includes("غير موجود في طابور اليوم")) {
+      throw readErr;
+    }
+    // Proceed to updateDoc if offline cache error
+  }
+
   const nowIso = new Date().toISOString();
   const updates: Partial<PatientRecord> = { status: newStatus };
 
@@ -1491,27 +1518,39 @@ export async function updatePatientStatus(
   if (newStatus === 'done') updates.doneAt = nowIso;
   if (newStatus === 'cancelled') updates.cancelledAt = nowIso;
 
-  await updateDoc(doc(db, "queues", doctorId, "patients", patientId), updates);
-
-  // Write-time session aggregation for status change
   try {
-    const today = getTodayDateString();
-    const sessionRef = doc(db, "doctors", doctorId, "dailySessions", today);
-    if (newStatus === 'cancelled') {
-      await updateDoc(sessionRef, {
-        cancelledCount: increment(1),
-        waitingCount: increment(-1)
-      });
-    } else if (newStatus === 'done') {
-      await updateDoc(sessionRef, {
-        completedCount: increment(1),
-        inConsultationCount: increment(-1)
-      });
-    } else if (newStatus === 'called') {
-      await updateDoc(sessionRef, {
-        inConsultationCount: increment(1),
-        waitingCount: increment(-1)
-      });
+    await updateDoc(ticketRef, updates);
+  } catch (err: any) {
+    if (err?.code === 'not-found' || err?.message?.includes('No document to update')) {
+      throw new Error("سجل المريض غير موجود في طابور اليوم أو تم أرشفته مسبقاً.");
+    }
+    throw err;
+  }
+
+  // Write-time session aggregation for status change with precise transition balancing
+  try {
+    if (previousStatus !== newStatus) {
+      const today = getTodayDateString();
+      const sessionRef = doc(db, "doctors", doctorId, "dailySessions", today);
+      const sessionUpdates: Record<string, any> = {};
+
+      // Decrement old status count
+      if (previousStatus === 'waiting') sessionUpdates.waitingCount = increment(-1);
+      else if (previousStatus === 'called') sessionUpdates.inConsultationCount = increment(-1);
+      else if (previousStatus === 'done') sessionUpdates.completedCount = increment(-1);
+      else if (previousStatus === 'cancelled') sessionUpdates.cancelledCount = increment(-1);
+      else if (previousStatus === 'no_show') sessionUpdates.noShowCount = increment(-1);
+
+      // Increment new status count
+      if (newStatus === 'waiting') sessionUpdates.waitingCount = increment(1);
+      else if (newStatus === 'called') sessionUpdates.inConsultationCount = increment(1);
+      else if (newStatus === 'done') sessionUpdates.completedCount = increment(1);
+      else if (newStatus === 'cancelled') sessionUpdates.cancelledCount = increment(1);
+      else if (newStatus === 'no_show') sessionUpdates.noShowCount = increment(1);
+
+      if (Object.keys(sessionUpdates).length > 0) {
+        await updateDoc(sessionRef, sessionUpdates);
+      }
     }
   } catch {
     // Non-blocking
@@ -4554,17 +4593,43 @@ export async function markQueuePatientNoShow(
 ): Promise<void> {
   const today = getTodayDateString();
   const ticketRef = doc(db, "queues", doctorId, "patients", patientRecordId);
-  await updateDoc(ticketRef, {
-    status: "no_show" as PatientStatus,
-    noShowAt: new Date().toISOString()
-  });
+
+  let prevStatus: PatientStatus = 'waiting';
+  try {
+    const snap = await getDoc(ticketRef);
+    if (!snap.exists()) {
+      throw new Error("سجل المريض غير موجود في طابور اليوم أو تم أرشفته مسبقاً.");
+    }
+    prevStatus = (snap.data() as PatientRecord).status;
+  } catch (readErr: any) {
+    if (readErr.message?.includes("غير موجود في طابور اليوم")) {
+      throw readErr;
+    }
+  }
+
+  try {
+    await updateDoc(ticketRef, {
+      status: "no_show" as PatientStatus,
+      noShowAt: new Date().toISOString()
+    });
+  } catch (err: any) {
+    if (err?.code === 'not-found' || err?.message?.includes('No document to update')) {
+      throw new Error("سجل المريض غير موجود في طابور اليوم أو تم أرشفته مسبقاً.");
+    }
+    throw err;
+  }
 
   try {
     const sessionRef = doc(db, "doctors", doctorId, "dailySessions", today);
-    await updateDoc(sessionRef, {
-      noShowCount: increment(1),
-      waitingCount: increment(-1)
-    });
+    const sessionUpdates: Record<string, any> = {
+      noShowCount: increment(1)
+    };
+    if (prevStatus === 'waiting') {
+      sessionUpdates.waitingCount = increment(-1);
+    } else if (prevStatus === 'called') {
+      sessionUpdates.inConsultationCount = increment(-1);
+    }
+    await updateDoc(sessionRef, sessionUpdates);
   } catch (err) {
     // Non-blocking
   }

@@ -73,10 +73,18 @@ export default async function handler(req: any, res: any) {
     return res.status(200).json(outcome);
   } catch (error: any) {
     console.error("[AI Chat API Error]:", error);
+    const rawMessage = error instanceof Error
+      ? error.message
+      : (typeof error === 'string'
+        ? error
+        : (typeof error?.message === 'string' ? error.message : (typeof error?.error === 'string' ? error.error : 'خطأ غير متوقع')));
+    const message = (rawMessage && rawMessage !== '[object Object]')
+      ? rawMessage
+      : 'خطأ غير متوقع في معالجة طلب الذكاء الاصطناعي';
     return res.status(500).json({
-      reply: `حدث خطأ أثناء معالجة الطلب: ${error?.message || "خطأ غير متوقع"}`,
+      reply: `حدث خطأ أثناء معالجة الطلب: ${message}`,
       status: "failed",
-      error: error?.message
+      error: message
     });
   }
 }

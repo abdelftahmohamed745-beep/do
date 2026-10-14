@@ -171,6 +171,11 @@ service cloud.firestore {
         allow read, write: if isOrgMember(doctorId) || isOwner(doctorId) || isAdmin();
       }
 
+      // AI Automation Trigger and Action Definitions (Doctor / Org Member or Admin ONLY)
+      match /aiDefinitions/{definitionId} {
+        allow read, write: if isOrgMember(doctorId) || isOwner(doctorId) || isAdmin();
+      }
+
       // AI Audit Logs (Doctor / Org Member or Admin ONLY)
       match /aiAuditLogs/{logId} {
         allow read, write: if isOrgMember(doctorId) || isOwner(doctorId) || isAdmin();

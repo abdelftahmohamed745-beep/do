@@ -5,12 +5,15 @@ import {
   AiAutonomousTask,
   AiAuditLog,
   AiToolName,
-  AiConversation
+  AiConversation,
+  AutomationDefinition
 } from '../../types/aiAgent.ts';
 import { ClinicMember } from '../../types.ts';
-import { collection, getDocs, query, orderBy, limit, doc, addDoc, updateDoc, setDoc, deleteDoc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, limit, doc, addDoc, updateDoc, setDoc, deleteDoc, getDoc, where } from 'firebase/firestore';
 import { auth, db } from '../../firebase/config';
 import { dispatchClinicEvent, ClinicEventPayload } from './aiEventEngine';
+import { validateAndNormalizeTask } from './taskValidation.ts';
+import { ALL_BUILT_IN_DEFINITIONS, validateAutomationDefinition } from './automationRegistry.ts';
 
 export interface SendAiMessageParams {
   clinicId: string;
@@ -19,6 +22,8 @@ export interface SendAiMessageParams {
   isDoctorOwner: boolean;
   isSubscriptionActive: boolean;
   confirmedActionId?: string;
+  signal?: AbortSignal;
+  requestId?: string;
 }
 
 /**
@@ -85,20 +90,47 @@ export async function sendAiMessage(params: SendAiMessageParams): Promise<{
     const response = await fetch('/api/ai/chat', {
       method: 'POST',
       headers,
-      body: JSON.stringify(params)
+      signal: params.signal,
+      body: JSON.stringify({
+        clinicId: params.clinicId,
+        messages: params.messages,
+        userMember: params.userMember,
+        isDoctorOwner: params.isDoctorOwner,
+        isSubscriptionActive: params.isSubscriptionActive,
+        confirmedActionId: params.confirmedActionId,
+        requestId: params.requestId
+      })
     });
 
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
-      // The API returns the user-facing reason in `reply`; prefer it over a generic status message.
-      throw new Error(errData.reply || errData.error || `خطأ في استجابة الخادم (${response.status})`);
+      const replyStr = typeof errData?.reply === 'string'
+        ? errData.reply
+        : (typeof errData?.reply?.message === 'string' ? errData.reply.message : '');
+      const errorStr = typeof errData?.error === 'string'
+        ? errData.error
+        : (typeof errData?.error?.message === 'string' ? errData.error.message : '');
+      const finalMsg = replyStr || errorStr || `خطأ في استجابة الخادم (${response.status})`;
+      throw new Error(finalMsg !== '[object Object]' ? finalMsg : `خطأ في استجابة الخادم (${response.status})`);
     }
 
     return await response.json();
   } catch (error: any) {
+    if (error?.name === 'AbortError' || params.signal?.aborted) {
+      return {
+        reply: 'تم إيقاف أو تجاوز الطلب.',
+        status: 'failed'
+      };
+    }
     console.error('[AI Client Error]:', error);
+    const rawMsg = error instanceof Error
+      ? error.message
+      : (typeof error === 'string' ? error : (typeof error?.message === 'string' ? error.message : ''));
+    const safeMsg = (rawMsg && rawMsg !== '[object Object]') ? rawMsg : 'خطأ في الشبكة أو الاتصال بالخادم';
     return {
-      reply: `تعذر الاتصال بخادم الذكاء الاصطناعي: ${error.message || 'خطأ في الشبكة'}`,
+      reply: safeMsg.startsWith('حدث') || safeMsg.startsWith('تعذر') || safeMsg.startsWith('عفواً') || safeMsg.startsWith('غير مصرح') || safeMsg.startsWith('تم رفض')
+        ? safeMsg
+        : `تعذر الاتصال بخادم الذكاء الاصطناعي: ${safeMsg}`,
       status: 'failed'
     };
   }
@@ -190,19 +222,24 @@ export async function getClinicAiTasks(clinicId: string): Promise<AiAutonomousTa
 }
 
 /**
- * Save a new autonomous AI task
+ * Save a new autonomous AI task with strict validation and undefined stripping
  */
 export async function saveClinicAiTask(
   clinicId: string,
-  task: Omit<AiAutonomousTask, 'id' | 'createdAt' | 'executionCount'>
+  task: Partial<AiAutonomousTask>
 ): Promise<string> {
+  const validation = validateAndNormalizeTask(
+    task,
+    clinicId,
+    { uid: task.createdBy || '', name: task.createdByName }
+  );
+
+  if (!validation.valid || !validation.task) {
+    throw new Error(validation.error || 'بيانات المهمة الآلية غير صالحة');
+  }
+
   const colRef = collection(db, 'doctors', clinicId, 'aiTasks');
-  const nowIso = new Date().toISOString();
-  const docRef = await addDoc(colRef, {
-    ...task,
-    createdAt: nowIso,
-    executionCount: 0
-  });
+  const docRef = await addDoc(colRef, validation.task);
   return docRef.id;
 }
 
@@ -219,6 +256,197 @@ export async function toggleClinicAiTaskStatus(
     status,
     updatedAt: new Date().toISOString()
   });
+}
+
+/**
+ * Update an existing autonomous task configuration
+ */
+export async function updateClinicAiTask(
+  clinicId: string,
+  taskId: string,
+  updates: Partial<AiAutonomousTask>
+): Promise<void> {
+  const taskRef = doc(db, 'doctors', clinicId, 'aiTasks', taskId);
+  const cleanUpdates = sanitizeDocData({
+    ...updates,
+    updatedAt: new Date().toISOString()
+  });
+  await updateDoc(taskRef, cleanUpdates);
+}
+
+/**
+ * Permanently delete an autonomous task
+ */
+export async function deleteClinicAiTask(
+  clinicId: string,
+  taskId: string
+): Promise<void> {
+  const taskRef = doc(db, 'doctors', clinicId, 'aiTasks', taskId);
+  await deleteDoc(taskRef);
+}
+
+// ============================================================================
+// AUTOMATION TRIGGER & ACTION DEFINITIONS (BUILT-IN + CLINIC EXTENSIONS)
+// ============================================================================
+
+const DEF_LOCAL_KEY_PREFIX = 'dory_ai_definitions_';
+
+export function getLocalDefinitions(clinicId: string): AutomationDefinition[] {
+  try {
+    const raw = localStorage.getItem(`${DEF_LOCAL_KEY_PREFIX}${clinicId}`);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalDefinitions(clinicId: string, defs: AutomationDefinition[]): void {
+  try {
+    localStorage.setItem(`${DEF_LOCAL_KEY_PREFIX}${clinicId}`, JSON.stringify(defs));
+  } catch {}
+}
+
+/**
+ * Fetch all automation definitions (combines system built-ins with clinic-scoped custom definitions)
+ */
+export async function getClinicAutomationDefinitions(clinicId: string): Promise<AutomationDefinition[]> {
+  const localCustom = getLocalDefinitions(clinicId);
+  let clinicCustom: AutomationDefinition[] = [];
+
+  try {
+    const colRef = collection(db, 'doctors', clinicId, 'aiDefinitions');
+    const snap = await getDocs(query(colRef, limit(100)));
+    snap.forEach((d) => {
+      clinicCustom.push({ id: d.id, ...d.data() } as AutomationDefinition);
+    });
+
+    if (clinicCustom.length > 0) {
+      saveLocalDefinitions(clinicId, clinicCustom);
+    } else if (localCustom.length > 0) {
+      clinicCustom = localCustom;
+    }
+  } catch (err) {
+    console.warn('[AI Client] Failed reading definitions from Firestore, using cache/built-ins:', err);
+    clinicCustom = localCustom;
+  }
+
+  // Deduplicate and merge: Custom definitions can override by ID, or append to built-ins
+  const map = new Map<string, AutomationDefinition>();
+  ALL_BUILT_IN_DEFINITIONS.forEach((b) => map.set(b.id, b));
+  clinicCustom.forEach((c) => map.set(c.id, c));
+
+  return Array.from(map.values());
+}
+
+/**
+ * Save a new clinic-scoped custom automation definition
+ */
+export async function saveClinicAutomationDefinition(
+  clinicId: string,
+  rawDef: Partial<AutomationDefinition>,
+  actor: { uid: string; name?: string }
+): Promise<AutomationDefinition> {
+  const validation = validateAutomationDefinition(rawDef, clinicId, actor);
+  if (!validation.valid || !validation.definition) {
+    throw new Error(validation.error || 'بيانات القالب غير صالحة');
+  }
+
+  const def = validation.definition;
+  const cleanDef = sanitizeDocData(def);
+
+  const docRef = doc(db, 'doctors', clinicId, 'aiDefinitions', def.id);
+  await setDoc(docRef, cleanDef);
+
+  // Update local cache
+  const cached = getLocalDefinitions(clinicId).filter((d) => d.id !== def.id);
+  saveLocalDefinitions(clinicId, [def, ...cached]);
+
+  return def;
+}
+
+/**
+ * Update an existing clinic-scoped automation definition
+ */
+export async function updateClinicAutomationDefinition(
+  clinicId: string,
+  defId: string,
+  updates: Partial<AutomationDefinition>
+): Promise<void> {
+  // Built-ins cannot be modified directly
+  if (defId.startsWith('builtin_')) {
+    throw new Error('لا يمكن تعديل القوالب المدمجة الأساسية للنظام. يمكنك إنشاء قالب مخصص مشتق منها.');
+  }
+
+  const docRef = doc(db, 'doctors', clinicId, 'aiDefinitions', defId);
+  const cleanUpdates = sanitizeDocData({
+    ...updates,
+    updatedAt: new Date().toISOString()
+  });
+
+  await updateDoc(docRef, cleanUpdates);
+
+  const cached = getLocalDefinitions(clinicId).map((d) => (d.id === defId ? { ...d, ...cleanUpdates } : d));
+  saveLocalDefinitions(clinicId, cached);
+}
+
+/**
+ * Toggle an automation definition between active and disabled
+ */
+export async function toggleClinicAutomationDefinitionStatus(
+  clinicId: string,
+  defId: string,
+  status: 'active' | 'disabled'
+): Promise<void> {
+  if (defId.startsWith('builtin_')) {
+    throw new Error('لا يمكن تعطيل القوالب المدمجة الأساسية للنظام');
+  }
+
+  const docRef = doc(db, 'doctors', clinicId, 'aiDefinitions', defId);
+  await updateDoc(docRef, {
+    status,
+    updatedAt: new Date().toISOString()
+  });
+
+  const cached = getLocalDefinitions(clinicId).map((d) => (d.id === defId ? { ...d, status } : d));
+  saveLocalDefinitions(clinicId, cached);
+}
+
+/**
+ * Safely delete an automation definition with dependency check against active tasks
+ */
+export async function deleteClinicAutomationDefinition(
+  clinicId: string,
+  defId: string
+): Promise<{ deleted: boolean; notice?: string }> {
+  if (defId.startsWith('builtin_')) {
+    throw new Error('لا يمكن حذف القوالب المدمجة الأساسية للنظام');
+  }
+
+  // Safe dependency check: verify if any tasks currently reference this definition
+  try {
+    const tasksCol = collection(db, 'doctors', clinicId, 'aiTasks');
+    const qTasks = query(tasksCol, where('definitionId', '==', defId), limit(10));
+    const snap = await getDocs(qTasks);
+
+    if (!snap.empty) {
+      // Instead of breaking tasks, safely deactivate the definition
+      await toggleClinicAutomationDefinitionStatus(clinicId, defId, 'disabled');
+      return {
+        deleted: false,
+        notice: `تم تعطيل القالب بدلاً من حذفه نهائياً لأن هناك (${snap.size}) مهام آلية نشطة تعتمد عليه حالياً.`
+      };
+    }
+  } catch (err) {
+    console.warn('[AI Client] Dependency check notice:', err);
+  }
+
+  const docRef = doc(db, 'doctors', clinicId, 'aiDefinitions', defId);
+  await deleteDoc(docRef);
+
+  const cached = getLocalDefinitions(clinicId).filter((d) => d.id !== defId);
+  saveLocalDefinitions(clinicId, cached);
+
+  return { deleted: true };
 }
 
 /**

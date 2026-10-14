@@ -411,6 +411,62 @@ export const AI_TOOL_DEFINITIONS: Record<AiToolName, AiToolDefinition> = {
     }
   },
 
+  edit_autonomous_task: {
+    name: 'edit_autonomous_task',
+    category: 'WRITE',
+    requiredPermission: 'MANAGE_SETTINGS',
+    descriptionAr: 'تعديل بيانات أو شروط أو إجراء مهمة آلية موجودة مسبقاً',
+    descriptionEn: 'Edit an existing autonomous task configuration',
+    parameters: {
+      taskId: {
+        name: 'taskId',
+        type: 'string',
+        description: 'معرف المهمة الآلية المراد تعديلها',
+        required: true
+      },
+      title: {
+        name: 'title',
+        type: 'string',
+        description: 'العنوان الجديد للمهمة',
+        required: false
+      },
+      description: {
+        name: 'description',
+        type: 'string',
+        description: 'الوصف الجديد للمهمة',
+        required: false
+      },
+      threshold: {
+        name: 'threshold',
+        type: 'number',
+        description: 'القيمة الحدية الجديدة للشرط',
+        required: false
+      },
+      messageTemplate: {
+        name: 'messageTemplate',
+        type: 'string',
+        description: 'نص التنبيه أو الرسالة المعدل',
+        required: false
+      }
+    }
+  },
+
+  delete_autonomous_task: {
+    name: 'delete_autonomous_task',
+    category: 'WRITE',
+    requiredPermission: 'MANAGE_SETTINGS',
+    descriptionAr: 'حذف مهمة آلية ذاتية بشكل نهائي من العيادة',
+    descriptionEn: 'Permanently delete an autonomous task configuration from the clinic',
+    parameters: {
+      taskId: {
+        name: 'taskId',
+        type: 'string',
+        description: 'معرف المهمة الآلية المراد حذفها',
+        required: true
+      }
+    }
+  },
+
   update_patient_profile: {
     name: 'update_patient_profile',
     category: 'WRITE',

@@ -3,6 +3,8 @@ import { verifyFirebaseIdToken, verifyClinicAccess } from '../src/server/authVer
 import { calculateExpirationDate } from '../src/utils/subscriptionUtils';
 import { evaluateSubscriptionStatus } from '../src/services/firebaseService';
 import { cleanMessageForStorage } from '../src/services/ai/aiAgentClient';
+import { sanitizeFirestorePayload, validateAndNormalizeTask } from '../src/services/ai/taskValidation';
+import { classifyProviderError } from '../src/server/aiAgentServer';
 import type { AiConversation, AiAgentMessage } from '../src/types/aiAgent';
 import type { DoctorProfile } from '../src/types';
 
@@ -367,6 +369,272 @@ async function runAudit() {
     auditResults.push({
       suite: '4. Subscription Evaluation',
       testName: '4.1 Authoritative Subscription Expiry Computation',
+      result: 'FAIL',
+      evidence: `Error: ${err.message}`
+    });
+  }
+
+  // =========================================================================
+  // SUITE 5: FIRESTORE TASK PERSISTENCE & UNDEFINED-SAFETY
+  // =========================================================================
+  console.log('--- Suite 5: Firestore Task Persistence & Undefined-Safety ---');
+
+  // Test 5.1: Deep Undefined Elimination with Intentional Null Preservation
+  try {
+    const rawPayload: any = {
+      title: 'مهمة متابعة الحالات',
+      notes: null, // Intentional null
+      optionalNote: undefined, // Must be stripped
+      nested: {
+        keep: 'value',
+        removeMe: undefined,
+        nullField: null,
+        innerList: [1, undefined, null, { deeplyNested: undefined, keepDeep: 42 }]
+      }
+    };
+
+    const sanitized = sanitizeFirestorePayload(rawPayload);
+    const hasUndefinedInRoot = 'optionalNote' in sanitized;
+    const hasUndefinedInNested = 'removeMe' in sanitized.nested;
+    const hasUndefinedInDeep = 'deeplyNested' in sanitized.nested.innerList[2];
+    const preservedNull1 = sanitized.notes === null;
+    const preservedNull2 = sanitized.nested.nullField === null;
+    const preservedDeep = sanitized.nested.innerList[2].keepDeep === 42;
+
+    if (!hasUndefinedInRoot && !hasUndefinedInNested && !hasUndefinedInDeep && preservedNull1 && preservedNull2 && preservedDeep) {
+      auditResults.push({
+        suite: '5. Firestore Task Persistence',
+        testName: '5.1 Deep Undefined Elimination with Null Semantics Preservation',
+        result: 'PASS',
+        evidence: 'sanitizeFirestorePayload cleanly eliminated all undefined properties while preserving null values and nested arrays.'
+      });
+    } else {
+      auditResults.push({
+        suite: '5. Firestore Task Persistence',
+        testName: '5.1 Deep Undefined Elimination with Null Semantics Preservation',
+        result: 'FAIL',
+        evidence: `Sanitization leak: rootUndef=${hasUndefinedInRoot}, nestedUndef=${hasUndefinedInNested}, preservedNull=${preservedNull1}`
+      });
+    }
+  } catch (err: any) {
+    auditResults.push({
+      suite: '5. Firestore Task Persistence',
+      testName: '5.1 Deep Undefined Elimination with Null Semantics Preservation',
+      result: 'FAIL',
+      evidence: `Error: ${err.message}`
+    });
+  }
+
+  // Test 5.2: Required Field Validation & Malformed Task Rejection
+  try {
+    const malformed1 = validateAndNormalizeTask({ title: '' }, 'clinic_1', { uid: 'u1' });
+    const malformed2 = validateAndNormalizeTask({ title: 'valid' }, '', { uid: 'u1' });
+
+    if (!malformed1.valid && malformed1.fieldErrors?.title && !malformed2.valid && malformed2.fieldErrors?.clinicId) {
+      auditResults.push({
+        suite: '5. Firestore Task Persistence',
+        testName: '5.2 Required Field Validation & Malformed Rejection',
+        result: 'PASS',
+        evidence: 'Rejected empty title and empty clinicId with explicit fieldErrors without writing to database.'
+      });
+    } else {
+      auditResults.push({
+        suite: '5. Firestore Task Persistence',
+        testName: '5.2 Required Field Validation & Malformed Rejection',
+        result: 'FAIL',
+        evidence: `Validation failed to catch missing fields: m1=${JSON.stringify(malformed1)}, m2=${JSON.stringify(malformed2)}`
+      });
+    }
+  } catch (err: any) {
+    auditResults.push({
+      suite: '5. Firestore Task Persistence',
+      testName: '5.2 Required Field Validation & Malformed Rejection',
+      result: 'FAIL',
+      evidence: `Error: ${err.message}`
+    });
+  }
+
+  // Test 5.3: Valid Task Normalization & Safe Payload Construction
+  try {
+    const validRaw = {
+      title: 'إرسال تنبيه للمتأخرين',
+      triggerType: 'EVENT',
+      triggerConfig: {
+        event: 'PATIENT_CALLED',
+        optionalUndefined: undefined
+      },
+      actionType: 'SEND_REMINDER',
+      actionConfig: {
+        severity: 'urgent',
+        autoExecution: true,
+        messageTemplate: 'يرجى التوجه إلى غرفة الكشف'
+      }
+    };
+
+    const norm = validateAndNormalizeTask(validRaw, 'clinic_123', { uid: 'doctor_1', name: 'د. أحمد' });
+
+    if (norm.valid && norm.task) {
+      const keys = Object.keys(norm.task);
+      const values = Object.values(norm.task);
+      const hasAnyUndefined = values.some((v) => v === undefined);
+      const triggerKeys = Object.keys(norm.task.triggerConfig || {});
+
+      if (!hasAnyUndefined && !triggerKeys.includes('optionalUndefined') && norm.task.clinicId === 'clinic_123' && norm.task.status === 'active') {
+        auditResults.push({
+          suite: '5. Firestore Task Persistence',
+          testName: '5.3 Valid Task Normalization & Safe Payload Construction',
+          result: 'PASS',
+          evidence: `Task validated and normalized successfully without undefined properties: triggerEvent=${norm.task.triggerConfig?.event}, actionType=${norm.task.actionType}`
+        });
+      } else {
+        auditResults.push({
+          suite: '5. Firestore Task Persistence',
+          testName: '5.3 Valid Task Normalization & Safe Payload Construction',
+          result: 'FAIL',
+          evidence: `Task normalized with undefined fields: ${JSON.stringify(norm.task)}`
+        });
+      }
+    } else {
+      auditResults.push({
+        suite: '5. Firestore Task Persistence',
+        testName: '5.3 Valid Task Normalization & Safe Payload Construction',
+        result: 'FAIL',
+        evidence: `Task was unexpectedly marked invalid: ${norm.error}`
+      });
+    }
+  } catch (err: any) {
+    auditResults.push({
+      suite: '5. Firestore Task Persistence',
+      testName: '5.3 Valid Task Normalization & Safe Payload Construction',
+      result: 'FAIL',
+      evidence: `Error: ${err.message}`
+    });
+  }
+
+  // =========================================================================
+  // SUITE 6: AI RESILIENCE & PROVIDER FAULT-TOLERANCE
+  // =========================================================================
+  console.log('--- Suite 6: AI Resilience & Provider Fault-Tolerance ---');
+
+  // Test 6.1: Temporary Overload (503 UNAVAILABLE) Error Classification
+  try {
+    const error503 = new Error('503 UNAVAILABLE: This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.');
+    const classified = classifyProviderError(error503);
+
+    if (classified.category === 'TRANSIENT_OVERLOAD' && classified.isRetryable === true && classified.status === 503) {
+      auditResults.push({
+        suite: '6. AI Resilience & Fault-Tolerance',
+        testName: '6.1 Temporary Overload (503 UNAVAILABLE) Classification',
+        result: 'PASS',
+        evidence: `Classified as TRANSIENT_OVERLOAD (status 503, retryable=true) with localized message: "${classified.messageAr}"`
+      });
+    } else {
+      auditResults.push({
+        suite: '6. AI Resilience & Fault-Tolerance',
+        testName: '6.1 Temporary Overload (503 UNAVAILABLE) Classification',
+        result: 'FAIL',
+        evidence: `Unexpected classification: ${JSON.stringify(classified)}`
+      });
+    }
+  } catch (err: any) {
+    auditResults.push({
+      suite: '6. AI Resilience & Fault-Tolerance',
+      testName: '6.1 Temporary Overload (503 UNAVAILABLE) Classification',
+      result: 'FAIL',
+      evidence: `Error: ${err.message}`
+    });
+  }
+
+  // Test 6.2: Rate Limit (429) & Retry-After Header Parsing
+  try {
+    const error429 = {
+      message: '429 RESOURCE_EXHAUSTED: quota exceeded',
+      status: 429,
+      response: {
+        headers: {
+          get: (header: string) => (header === 'retry-after' ? '3' : null)
+        }
+      }
+    };
+    const classified = classifyProviderError(error429);
+
+    if (classified.category === 'RATE_LIMIT' && classified.isRetryable === true && classified.retryAfterMs === 3000) {
+      auditResults.push({
+        suite: '6. AI Resilience & Fault-Tolerance',
+        testName: '6.2 Rate Limit (429) & Retry-After Parsing',
+        result: 'PASS',
+        evidence: `Classified as RATE_LIMIT with retryAfterMs=3000 correctly extracted.`
+      });
+    } else {
+      auditResults.push({
+        suite: '6. AI Resilience & Fault-Tolerance',
+        testName: '6.2 Rate Limit (429) & Retry-After Parsing',
+        result: 'FAIL',
+        evidence: `Unexpected classification: ${JSON.stringify(classified)}`
+      });
+    }
+  } catch (err: any) {
+    auditResults.push({
+      suite: '6. AI Resilience & Fault-Tolerance',
+      testName: '6.2 Rate Limit (429) & Retry-After Parsing',
+      result: 'FAIL',
+      evidence: `Error: ${err.message}`
+    });
+  }
+
+  // Test 6.3: Request Timeout Classification
+  try {
+    const errorTimeout = new Error('Timeout exceeding 12000ms on model gemini-3.1-flash');
+    const classified = classifyProviderError(errorTimeout);
+
+    if (classified.category === 'TIMEOUT' && classified.isRetryable === true && classified.status === 504) {
+      auditResults.push({
+        suite: '6. AI Resilience & Fault-Tolerance',
+        testName: '6.3 Request Timeout Classification',
+        result: 'PASS',
+        evidence: `Classified as TIMEOUT (status 504, retryable=true) with localized message: "${classified.messageAr}"`
+      });
+    } else {
+      auditResults.push({
+        suite: '6. AI Resilience & Fault-Tolerance',
+        testName: '6.3 Request Timeout Classification',
+        result: 'FAIL',
+        evidence: `Unexpected classification: ${JSON.stringify(classified)}`
+      });
+    }
+  } catch (err: any) {
+    auditResults.push({
+      suite: '6. AI Resilience & Fault-Tolerance',
+      testName: '6.3 Request Timeout Classification',
+      result: 'FAIL',
+      evidence: `Error: ${err.message}`
+    });
+  }
+
+  // Test 6.4: Unsupported Model (404) vs Transient Differentiation
+  try {
+    const error404 = { message: 'models/gemini-old is not found for API version v1beta', status: 404 };
+    const classified = classifyProviderError(error404);
+
+    if (classified.category === 'UNSUPPORTED_MODEL' && classified.isRetryable === false && classified.status === 404) {
+      auditResults.push({
+        suite: '6. AI Resilience & Fault-Tolerance',
+        testName: '6.4 Unsupported Model (404) Non-Retryable Differentiation',
+        result: 'PASS',
+        evidence: 'Classified 404 as non-retryable UNSUPPORTED_MODEL, allowing clean advancement to verified fallback without spinning.'
+      });
+    } else {
+      auditResults.push({
+        suite: '6. AI Resilience & Fault-Tolerance',
+        testName: '6.4 Unsupported Model (404) Non-Retryable Differentiation',
+        result: 'FAIL',
+        evidence: `Unexpected classification: ${JSON.stringify(classified)}`
+      });
+    }
+  } catch (err: any) {
+    auditResults.push({
+      suite: '6. AI Resilience & Fault-Tolerance',
+      testName: '6.4 Unsupported Model (404) Non-Retryable Differentiation',
       result: 'FAIL',
       evidence: `Error: ${err.message}`
     });

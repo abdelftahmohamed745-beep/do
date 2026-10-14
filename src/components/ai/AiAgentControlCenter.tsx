@@ -20,6 +20,7 @@ import {
   MessageSquare,
   History,
   Trash2,
+  Pencil,
   Sparkles,
   ArrowRight
 } from 'lucide-react';
@@ -29,7 +30,9 @@ import {
   AiToolCall,
   AiAutonomousTask,
   AiAuditLog,
-  AiConversation
+  AiConversation,
+  AutomationDefinition,
+  AiRequestLifecycleState
 } from '../../types/aiAgent';
 import {
   sendAiMessage,
@@ -37,7 +40,14 @@ import {
   fetchAiStatus,
   getClinicAiTasks,
   saveClinicAiTask,
+  updateClinicAiTask,
+  deleteClinicAiTask,
   toggleClinicAiTaskStatus,
+  getClinicAutomationDefinitions,
+  saveClinicAutomationDefinition,
+  updateClinicAutomationDefinition,
+  toggleClinicAutomationDefinitionStatus,
+  deleteClinicAutomationDefinition,
   getClinicAiAuditLogs,
   getClinicAiConversations,
   getAiConversation,
@@ -48,6 +58,7 @@ import {
   setActiveConversationId,
   getLocalConversations
 } from '../../services/ai/aiAgentClient';
+import { TRUSTED_HANDLER_METADATA } from '../../services/ai/automationRegistry';
 
 interface AiAgentControlCenterProps {
   doctor: DoctorProfile;
@@ -66,9 +77,12 @@ export const AiAgentControlCenter: React.FC<AiAgentControlCenterProps> = ({
   onClose,
   onShowToast
 }) => {
-  const [activeTab, setActiveTab] = useState<'chat' | 'tasks' | 'audit'>('chat');
+  const [activeTab, setActiveTab] = useState<'chat' | 'tasks' | 'definitions' | 'audit'>('chat');
   const [inputMessage, setInputMessage] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [requestLifecycleState, setRequestLifecycleState] = useState<AiRequestLifecycleState>('idle');
+  const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+
   const [aiStatus, setAiStatus] = useState<{ provider: string; status: string; hasApiKey: boolean }>({
     provider: 'checking...',
     status: 'checking',
@@ -115,6 +129,24 @@ export const AiAgentControlCenter: React.FC<AiAgentControlCenterProps> = ({
   const [newTaskTrigger, setNewTaskTrigger] = useState<'QUEUE_WAIT_TIME_EXCEEDED' | 'OUTSTANDING_BALANCE_EXCEEDED' | 'PATIENT_REGISTERED'>('QUEUE_WAIT_TIME_EXCEEDED');
   const [newTaskThreshold, setNewTaskThreshold] = useState<number>(30);
   const [newTaskAction, setNewTaskAction] = useState<'ALERT_STAFF' | 'SEND_REMINDER' | 'FLAG_HIGH_BALANCE'>('ALERT_STAFF');
+  const [selectedTriggerDefId, setSelectedTriggerDefId] = useState<string>('');
+  const [selectedActionDefId, setSelectedActionDefId] = useState<string>('');
+
+  // Automation Definitions State
+  const [definitions, setDefinitions] = useState<AutomationDefinition[]>([]);
+  const [loadingDefinitions, setLoadingDefinitions] = useState(false);
+  const [defSearchQuery, setDefSearchQuery] = useState('');
+  const [defTypeFilter, setDefTypeFilter] = useState<'all' | 'TRIGGER' | 'ACTION'>('all');
+  const [isDefModalOpen, setIsDefModalOpen] = useState(false);
+  const [editingDef, setEditingDef] = useState<AutomationDefinition | null>(null);
+  const [defName, setDefName] = useState('');
+  const [defDesc, setDefDesc] = useState('');
+  const [defKind, setDefKind] = useState<'TRIGGER' | 'ACTION'>('TRIGGER');
+  const [defHandlerId, setDefHandlerId] = useState<string>('QUEUE_WAIT_TIME_EXCEEDED');
+  const [defThreshold, setDefThreshold] = useState<number>(30);
+  const [defMessageTemplate, setDefMessageTemplate] = useState<string>('تنبيه آلي من وكيل دوري');
+  const [defTargetRole, setDefTargetRole] = useState<string>('ALL');
+  const [defSeverity, setDefSeverity] = useState<'info' | 'warning' | 'urgent'>('warning');
 
   // Audit Logs state
   const [auditLogs, setAuditLogs] = useState<AiAuditLog[]>([]);
@@ -123,7 +155,23 @@ export const AiAgentControlCenter: React.FC<AiAgentControlCenterProps> = ({
   // Expanded tool call steps map
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
 
+  // Editing existing task state
+  const [editingTask, setEditingTask] = useState<AiAutonomousTask | null>(null);
+
+  // Request Lifecycle & Superseding references
+  const currentAbortControllerRef = useRef<AbortController | null>(null);
+  const currentRequestIdRef = useRef<string | null>(null);
+
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Cleanup in-flight foreground AI requests on unmount
+  useEffect(() => {
+    return () => {
+      if (currentAbortControllerRef.current) {
+        currentAbortControllerRef.current.abort('unmount');
+      }
+    };
+  }, []);
 
   // 1. Initial Load: Status & Persistent Conversations
   useEffect(() => {
@@ -204,14 +252,21 @@ export const AiAgentControlCenter: React.FC<AiAgentControlCenterProps> = ({
     }
   }, [messages, activeTab, isProcessing]);
 
-  // Load Tasks / Audit when corresponding tab active
+  // Load Tasks / Definitions / Audit when corresponding tab active
   useEffect(() => {
     if (activeTab === 'tasks') {
       loadTasks();
+    } else if (activeTab === 'definitions') {
+      loadDefinitions();
     } else if (activeTab === 'audit') {
       loadAudit();
     }
   }, [activeTab, doctor.uid]);
+
+  // Pre-load definitions for Task creator
+  useEffect(() => {
+    loadDefinitions();
+  }, [doctor.uid]);
 
   async function loadTasks() {
     setLoadingTasks(true);
@@ -220,11 +275,145 @@ export const AiAgentControlCenter: React.FC<AiAgentControlCenterProps> = ({
     setLoadingTasks(false);
   }
 
+  async function loadDefinitions() {
+    setLoadingDefinitions(true);
+    try {
+      const data = await getClinicAutomationDefinitions(doctor.uid);
+      setDefinitions(data);
+    } catch (err) {
+      console.error('Failed to load definitions:', err);
+    } finally {
+      setLoadingDefinitions(false);
+    }
+  }
+
   async function loadAudit() {
     setLoadingAudit(true);
     const data = await getClinicAiAuditLogs(doctor.uid);
     setAuditLogs(data);
     setLoadingAudit(false);
+  }
+
+  // Definition CRUD Handlers
+  async function handleSaveDefinition() {
+    const cleanName = defName.trim();
+    if (!cleanName) {
+      if (onShowToast) onShowToast('اسم القالب مطلوب', 'warning');
+      return;
+    }
+
+    try {
+      const configFields: any[] = [];
+      const defaultConfig: Record<string, any> = {};
+
+      if (defKind === 'TRIGGER') {
+        if (defHandlerId === 'QUEUE_WAIT_TIME_EXCEEDED' || defHandlerId === 'OUTSTANDING_BALANCE_EXCEEDED' || defHandlerId === 'DAILY_CAPACITY_REACHED') {
+          configFields.push({
+            key: 'threshold',
+            labelAr: defHandlerId === 'QUEUE_WAIT_TIME_EXCEEDED' ? 'الحد بالدقائق' : (defHandlerId === 'DAILY_CAPACITY_REACHED' ? 'سقف المرضى' : 'المبلغ بالجنيه'),
+            type: 'number',
+            required: true,
+            defaultValue: defThreshold
+          });
+          defaultConfig.threshold = defThreshold;
+        }
+      } else {
+        if (defHandlerId === 'ALERT_STAFF' || defHandlerId === 'SEND_REMINDER') {
+          configFields.push({
+            key: 'messageTemplate',
+            labelAr: 'نص التنبيه الافتراضي',
+            type: 'string',
+            required: true,
+            defaultValue: defMessageTemplate
+          });
+          defaultConfig.messageTemplate = defMessageTemplate;
+        }
+        if (defHandlerId === 'ALERT_STAFF') {
+          configFields.push({
+            key: 'targetRole',
+            labelAr: 'الفئة المستهدفة',
+            type: 'select',
+            defaultValue: defTargetRole,
+            options: [
+              { value: 'ALL', labelAr: 'الجميع' },
+              { value: 'DOCTOR', labelAr: 'الأطباء' },
+              { value: 'ASSISTANT', labelAr: 'التمريض' },
+              { value: 'RECEPTIONIST', labelAr: 'الاستقبال' }
+            ]
+          });
+          defaultConfig.targetRole = defTargetRole;
+          defaultConfig.severity = defSeverity;
+        }
+      }
+
+      if (editingDef) {
+        await updateClinicAutomationDefinition(doctor.uid, editingDef.id, {
+          name: cleanName,
+          description: defDesc.trim() || cleanName,
+          configFields,
+          defaultConfig
+        });
+        if (onShowToast) onShowToast('تم تحديث القالب المخصص بنجاح', 'success');
+      } else {
+        await saveClinicAutomationDefinition(doctor.uid, {
+          name: cleanName,
+          description: defDesc.trim() || cleanName,
+          kind: defKind,
+          handlerId: defHandlerId,
+          configFields,
+          defaultConfig,
+          status: 'active'
+        }, {
+          uid: currentMember?.uid || doctor.uid,
+          name: currentMember?.name || doctor.name
+        });
+        if (onShowToast) onShowToast('تم حفظ القالب المخصص بنجاح في نظام العيادة', 'success');
+      }
+
+      setIsDefModalOpen(false);
+      setEditingDef(null);
+      setDefName('');
+      setDefDesc('');
+      loadDefinitions();
+    } catch (err: any) {
+      if (onShowToast) onShowToast(err.message || 'فشل حفظ القالب', 'error');
+    }
+  }
+
+  async function handleToggleDefStatus(def: AutomationDefinition) {
+    if (def.isBuiltIn) {
+      if (onShowToast) onShowToast('لا يمكن تعديل حالة القوالب المدمجة الأساسية للنظام', 'info');
+      return;
+    }
+    const next = def.status === 'active' ? 'disabled' : 'active';
+    try {
+      await toggleClinicAutomationDefinitionStatus(doctor.uid, def.id, next);
+      setDefinitions((prev) => prev.map((d) => (d.id === def.id ? { ...d, status: next } : d)));
+      if (onShowToast) onShowToast(`تم ${next === 'active' ? 'تفعيل' : 'تعطيل'} القالب`, 'info');
+    } catch (err: any) {
+      if (onShowToast) onShowToast(err.message || 'فشل تحديث حالة القالب', 'error');
+    }
+  }
+
+  async function handleDeleteDef(def: AutomationDefinition) {
+    if (def.isBuiltIn) {
+      if (onShowToast) onShowToast('لا يمكن حذف القوالب المدمجة الأساسية للنظام', 'warning');
+      return;
+    }
+    if (!confirm(`هل أنت متأكد من حذف القالب المخصص "${def.name}"؟`)) return;
+
+    try {
+      const outcome = await deleteClinicAutomationDefinition(doctor.uid, def.id);
+      if (outcome.deleted) {
+        setDefinitions((prev) => prev.filter((d) => d.id !== def.id));
+        if (onShowToast) onShowToast('تم حذف القالب المخصص نهائياً', 'success');
+      } else if (outcome.notice) {
+        setDefinitions((prev) => prev.map((d) => (d.id === def.id ? { ...d, status: 'disabled' } : d)));
+        if (onShowToast) onShowToast(outcome.notice, 'warning');
+      }
+    } catch (err: any) {
+      if (onShowToast) onShowToast(err.message || 'فشل حذف القالب', 'error');
+    }
   }
 
   // Handle Switching to a different conversation
@@ -302,10 +491,37 @@ export const AiAgentControlCenter: React.FC<AiAgentControlCenterProps> = ({
     }
   }
 
+  // Handle Cancel Current In-Flight Request
+  function handleCancelCurrentRequest() {
+    if (currentAbortControllerRef.current) {
+      currentAbortControllerRef.current.abort('user_cancelled');
+      currentAbortControllerRef.current = null;
+    }
+    currentRequestIdRef.current = null;
+    setActiveRequestId(null);
+    setIsProcessing(false);
+    setRequestLifecycleState('cancelled');
+    if (onShowToast) onShowToast('تم إيقاف الطلب الحالي', 'info');
+  }
+
   // Handle Send Message & Persist
   async function handleSendMessage(customPrompt?: string) {
     const textToSend = customPrompt || inputMessage;
-    if (!textToSend.trim() || isProcessing) return;
+    if (!textToSend.trim() || isProcessing) return; // Prevent duplicate rapid submission
+
+    // If an older foreground request is still active, abort it and supersede with this fresh command
+    if (currentAbortControllerRef.current) {
+      console.log('[AI Control Center] Superseding previous request with new user command');
+      currentAbortControllerRef.current.abort('superseded');
+    }
+
+    const thisRequestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    currentRequestIdRef.current = thisRequestId;
+    setActiveRequestId(thisRequestId);
+    setRequestLifecycleState('submitting');
+
+    const abortCtrl = new AbortController();
+    currentAbortControllerRef.current = abortCtrl;
 
     // Ensure we have an active conversation
     let currentConvId = activeConversationId;
@@ -332,6 +548,7 @@ export const AiAgentControlCenter: React.FC<AiAgentControlCenterProps> = ({
     setMessages(messagesWithUser);
     if (!customPrompt) setInputMessage('');
     setIsProcessing(true);
+    setRequestLifecycleState('waiting_ai');
 
     // Save user message immediately to storage
     await saveAiMessages(doctor.uid, currentConvId, messagesWithUser);
@@ -342,8 +559,17 @@ export const AiAgentControlCenter: React.FC<AiAgentControlCenterProps> = ({
         messages: messagesWithUser,
         userMember: currentMember,
         isDoctorOwner,
-        isSubscriptionActive
+        isSubscriptionActive,
+        signal: abortCtrl.signal,
+        requestId: thisRequestId
       });
+
+      // Stale / Cancelled / Superseded Guard:
+      // If a newer request was dispatched while this was in-flight, or if aborted, discard late result
+      if (currentRequestIdRef.current !== thisRequestId || abortCtrl.signal.aborted) {
+        console.log('[AI Control Center] Discarding response from superseded request:', thisRequestId);
+        return;
+      }
 
       const assistantMsg: AiAgentMessage = {
         id: `msg_a_${Date.now()}`,
@@ -463,10 +689,19 @@ export const AiAgentControlCenter: React.FC<AiAgentControlCenterProps> = ({
         });
       }
     } catch (err: any) {
+      if (currentRequestIdRef.current !== thisRequestId || abortCtrl.signal.aborted) {
+        return;
+      }
+      const rawMsg = err instanceof Error
+        ? err.message
+        : (typeof err === 'string' ? err : (typeof err?.message === 'string' ? err.message : ''));
+      const safeMsg = (rawMsg && rawMsg !== '[object Object]') ? rawMsg : 'تعذر إكمال العملية حالياً';
       const errMsg: AiAgentMessage = {
         id: `msg_err_${Date.now()}`,
         role: 'assistant',
-        content: `عفواً، واجهت مشكلة أثناء المعالجة: ${err.message || 'خطأ غير متوقع'}.`,
+        content: safeMsg.startsWith('عفواً') || safeMsg.startsWith('تعذر') || safeMsg.startsWith('حدث') || safeMsg.startsWith('غير مصرح')
+          ? safeMsg
+          : `عفواً، واجهت مشكلة أثناء المعالجة: ${safeMsg}.`,
         status: 'failed',
         timestamp: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })
       };
@@ -475,7 +710,9 @@ export const AiAgentControlCenter: React.FC<AiAgentControlCenterProps> = ({
       await saveAiMessages(doctor.uid, currentConvId, errorFull);
       setActiveConv((prev) => (prev ? { ...prev, messages: errorFull, messageCount: errorFull.length } : null));
     } finally {
-      setIsProcessing(false);
+      if (currentRequestIdRef.current === thisRequestId) {
+        setIsProcessing(false);
+      }
     }
   }
 
@@ -493,39 +730,98 @@ export const AiAgentControlCenter: React.FC<AiAgentControlCenterProps> = ({
     }
   }
 
-  // Handle Create Autonomous Task
-  async function handleCreateTask() {
-    if (!newTaskTitle.trim()) return;
+  // Handle Save (Create or Update) Autonomous Task
+  async function handleSaveTask() {
+    const cleanTitle = newTaskTitle.trim();
+    if (!cleanTitle) {
+      if (onShowToast) onShowToast('عنوان المهمة مطلوب', 'يرجى كتابة عنوان واضح للمهمة الآلية الذكية', 'warning');
+      return;
+    }
 
     try {
-      await saveClinicAiTask(doctor.uid, {
-        clinicId: doctor.uid,
-        title: newTaskTitle.trim(),
-        description: newTaskDesc.trim() || 'قاعدة آلية مخصصة للعيادة',
-        triggerType: newTaskTrigger === 'PATIENT_REGISTERED' ? 'EVENT' : 'CONDITION',
-        triggerConfig: {
-          event: newTaskTrigger === 'PATIENT_REGISTERED' ? 'PATIENT_REGISTERED' : undefined,
-          condition: newTaskTrigger !== 'PATIENT_REGISTERED' ? newTaskTrigger : undefined,
-          threshold: newTaskThreshold
-        },
-        actionType: newTaskAction,
-        actionConfig: {
-          severity: 'warning',
-          autoExecution: true
-        },
-        status: 'active',
-        createdBy: currentMember?.uid || doctor.uid,
-        createdByName: currentMember?.name || doctor.name
-      });
+      const triggerCfg: { event?: any; condition?: any; threshold?: number } = {};
+      if (newTaskTrigger === 'PATIENT_REGISTERED') {
+        triggerCfg.event = 'PATIENT_REGISTERED';
+      } else if (newTaskTrigger) {
+        triggerCfg.condition = newTaskTrigger as any;
+      }
+      if (newTaskThreshold !== undefined && newTaskThreshold !== null && !isNaN(Number(newTaskThreshold))) {
+        triggerCfg.threshold = Number(newTaskThreshold);
+      }
+
+      if (editingTask) {
+        await updateClinicAiTask(doctor.uid, editingTask.id, {
+          title: cleanTitle,
+          description: newTaskDesc.trim() || 'قاعدة آلية مخصصة للعيادة',
+          triggerType: newTaskTrigger === 'PATIENT_REGISTERED' ? 'EVENT' : 'CONDITION',
+          triggerConfig: triggerCfg,
+          actionType: newTaskAction,
+          actionConfig: {
+            severity: 'warning',
+            autoExecution: true,
+            messageTemplate: newTaskDesc.trim() || cleanTitle
+          }
+        });
+        if (onShowToast) onShowToast('تم تحديث المهمة الآلية بنجاح', 'success');
+      } else {
+        await saveClinicAiTask(doctor.uid, {
+          clinicId: doctor.uid,
+          title: cleanTitle,
+          description: newTaskDesc.trim() || 'قاعدة آلية مخصصة للعيادة',
+          triggerType: newTaskTrigger === 'PATIENT_REGISTERED' ? 'EVENT' : 'CONDITION',
+          triggerConfig: triggerCfg,
+          actionType: newTaskAction,
+          actionConfig: {
+            severity: 'warning',
+            autoExecution: true,
+            messageTemplate: newTaskDesc.trim() || cleanTitle
+          },
+          status: 'active',
+          createdBy: currentMember?.uid || doctor.uid,
+          createdByName: currentMember?.name || doctor.name
+        });
+        if (onShowToast) onShowToast('تم إنشاء وتفعيل المهمة الآلية بنجاح', 'القاعدة تعمل الآن تلقائياً مع أحداث العيادة', 'success');
+      }
 
       setIsNewTaskModalOpen(false);
+      setEditingTask(null);
       setNewTaskTitle('');
       setNewTaskDesc('');
       loadTasks();
-      if (onShowToast) onShowToast('تم إنشاء وتفعيل المهمة الآلية بنجاح', 'success');
     } catch (e: any) {
-      if (onShowToast) onShowToast(e.message || 'فشل إنشاء المهمة', 'error');
+      console.error('Task save error:', e);
+      if (onShowToast) onShowToast('فشل حفظ المهمة الآلية', e.message || 'يرجى التأكد من البيانات والمحاولة ثانية', 'error');
     }
+  }
+
+  // Handle Delete Autonomous Task
+  async function handleDeleteTask(taskId: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!confirm('هل تريد حذف هذه القاعدة الآلية بشكل نهائي من العيادة؟')) return;
+
+    try {
+      await deleteClinicAiTask(doctor.uid, taskId);
+      setTasks((prev) => prev.filter((t) => t.id !== taskId));
+      if (onShowToast) onShowToast('تم حذف القاعدة الآلية بنجاح', 'info');
+    } catch (err: any) {
+      if (onShowToast) onShowToast(err?.message || 'فشل حذف القاعدة', 'error');
+    }
+  }
+
+  // Open Edit Task Modal
+  function handleOpenEditTask(task: AiAutonomousTask, e: React.MouseEvent) {
+    e.stopPropagation();
+    setEditingTask(task);
+    setNewTaskTitle(task.title);
+    setNewTaskDesc(task.description);
+    if (task.triggerConfig?.event === 'PATIENT_REGISTERED') {
+      setNewTaskTrigger('PATIENT_REGISTERED');
+    } else if (task.triggerConfig?.condition) {
+      setNewTaskTrigger(task.triggerConfig.condition as any);
+    }
+    setNewTaskThreshold(task.triggerConfig?.threshold || 30);
+    setNewTaskAction(task.actionType as any);
+    setIsNewTaskModalOpen(true);
   }
 
   return (
@@ -1147,7 +1443,7 @@ export const AiAgentControlCenter: React.FC<AiAgentControlCenterProps> = ({
                     إلغاء
                   </button>
                   <button
-                    onClick={handleCreateTask}
+                    onClick={handleSaveTask}
                     disabled={!newTaskTitle.trim()}
                     className="px-5 py-2 bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold rounded-xl transition cursor-pointer disabled:opacity-50"
                   >

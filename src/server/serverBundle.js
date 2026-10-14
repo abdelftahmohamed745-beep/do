@@ -398,6 +398,60 @@ var AI_TOOL_DEFINITIONS = {
       }
     }
   },
+  edit_autonomous_task: {
+    name: "edit_autonomous_task",
+    category: "WRITE",
+    requiredPermission: "MANAGE_SETTINGS",
+    descriptionAr: "\u062A\u0639\u062F\u064A\u0644 \u0628\u064A\u0627\u0646\u0627\u062A \u0623\u0648 \u0634\u0631\u0648\u0637 \u0623\u0648 \u0625\u062C\u0631\u0627\u0621 \u0645\u0647\u0645\u0629 \u0622\u0644\u064A\u0629 \u0645\u0648\u062C\u0648\u062F\u0629 \u0645\u0633\u0628\u0642\u0627\u064B",
+    descriptionEn: "Edit an existing autonomous task configuration",
+    parameters: {
+      taskId: {
+        name: "taskId",
+        type: "string",
+        description: "\u0645\u0639\u0631\u0641 \u0627\u0644\u0645\u0647\u0645\u0629 \u0627\u0644\u0622\u0644\u064A\u0629 \u0627\u0644\u0645\u0631\u0627\u062F \u062A\u0639\u062F\u064A\u0644\u0647\u0627",
+        required: true
+      },
+      title: {
+        name: "title",
+        type: "string",
+        description: "\u0627\u0644\u0639\u0646\u0648\u0627\u0646 \u0627\u0644\u062C\u062F\u064A\u062F \u0644\u0644\u0645\u0647\u0645\u0629",
+        required: false
+      },
+      description: {
+        name: "description",
+        type: "string",
+        description: "\u0627\u0644\u0648\u0635\u0641 \u0627\u0644\u062C\u062F\u064A\u062F \u0644\u0644\u0645\u0647\u0645\u0629",
+        required: false
+      },
+      threshold: {
+        name: "threshold",
+        type: "number",
+        description: "\u0627\u0644\u0642\u064A\u0645\u0629 \u0627\u0644\u062D\u062F\u064A\u0629 \u0627\u0644\u062C\u062F\u064A\u062F\u0629 \u0644\u0644\u0634\u0631\u0637",
+        required: false
+      },
+      messageTemplate: {
+        name: "messageTemplate",
+        type: "string",
+        description: "\u0646\u0635 \u0627\u0644\u062A\u0646\u0628\u064A\u0647 \u0623\u0648 \u0627\u0644\u0631\u0633\u0627\u0644\u0629 \u0627\u0644\u0645\u0639\u062F\u0644",
+        required: false
+      }
+    }
+  },
+  delete_autonomous_task: {
+    name: "delete_autonomous_task",
+    category: "WRITE",
+    requiredPermission: "MANAGE_SETTINGS",
+    descriptionAr: "\u062D\u0630\u0641 \u0645\u0647\u0645\u0629 \u0622\u0644\u064A\u0629 \u0630\u0627\u062A\u064A\u0629 \u0628\u0634\u0643\u0644 \u0646\u0647\u0627\u0626\u064A \u0645\u0646 \u0627\u0644\u0639\u064A\u0627\u062F\u0629",
+    descriptionEn: "Permanently delete an autonomous task configuration from the clinic",
+    parameters: {
+      taskId: {
+        name: "taskId",
+        type: "string",
+        description: "\u0645\u0639\u0631\u0641 \u0627\u0644\u0645\u0647\u0645\u0629 \u0627\u0644\u0622\u0644\u064A\u0629 \u0627\u0644\u0645\u0631\u0627\u062F \u062D\u0630\u0641\u0647\u0627",
+        required: true
+      }
+    }
+  },
   update_patient_profile: {
     name: "update_patient_profile",
     category: "WRITE",
@@ -629,7 +683,8 @@ import {
   where as where2,
   limit as limit2,
   orderBy as orderBy2,
-  addDoc as addDoc3
+  addDoc as addDoc3,
+  deleteDoc as deleteDoc2
 } from "firebase/firestore";
 
 // src/firebase/config.ts
@@ -666,10 +721,13 @@ var auth = getAuth(app);
 auth.languageCode = "ar";
 var databaseId = firebaseConfigData.firestoreDatabaseId || "(default)";
 var db;
+var isBrowser = typeof window !== "undefined";
 try {
-  db = initializeFirestore(app, {
-    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
-  }, databaseId);
+  db = initializeFirestore(
+    app,
+    isBrowser ? { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) } : {},
+    databaseId
+  );
 } catch {
   db = getFirestore(app, databaseId);
 }
@@ -738,6 +796,121 @@ function hasPermission(member, permission, isDoctorOwnerFallback = false) {
   }
   const rolePerms = ROLE_PERMISSIONS[member.role];
   return rolePerms ? rolePerms.includes(permission) : false;
+}
+
+// src/services/ai/taskValidation.ts
+var VALID_TRIGGER_TYPES = ["EVENT", "SCHEDULE", "CONDITION"];
+var VALID_ACTION_TYPES = [
+  "SEND_REMINDER",
+  "ALERT_STAFF",
+  "FLAG_HIGH_BALANCE",
+  "AUTO_CALL_NEXT",
+  "GENERATE_SESSION_REPORT",
+  "SCHEDULE_REVISIT"
+];
+function sanitizeFirestorePayload(obj) {
+  if (obj === null || typeof obj !== "object") {
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.filter((item) => item !== void 0).map((item) => item !== null && typeof item === "object" && !(item instanceof Date) ? sanitizeFirestorePayload(item) : item);
+  }
+  const clean = {};
+  for (const [key, val] of Object.entries(obj)) {
+    if (val === void 0) {
+      continue;
+    }
+    if (val !== null && typeof val === "object" && !(val instanceof Date)) {
+      clean[key] = sanitizeFirestorePayload(val);
+    } else {
+      clean[key] = val;
+    }
+  }
+  return clean;
+}
+function validateAndNormalizeTask(rawTask, clinicId, actor) {
+  const fieldErrors = {};
+  if (!clinicId || typeof clinicId !== "string" || !clinicId.trim()) {
+    fieldErrors.clinicId = "\u0645\u0639\u0631\u0641 \u0627\u0644\u0639\u064A\u0627\u062F\u0629 (clinicId) \u0645\u0637\u0644\u0648\u0628";
+  }
+  const title = typeof rawTask?.title === "string" ? rawTask.title.trim() : "";
+  if (!title) {
+    fieldErrors.title = "\u0639\u0646\u0648\u0627\u0646 \u0627\u0644\u0645\u0647\u0645\u0629 \u0627\u0644\u0622\u0644\u064A\u0629 \u0645\u0637\u0644\u0648\u0628";
+  } else if (title.length < 2) {
+    fieldErrors.title = "\u0639\u0646\u0648\u0627\u0646 \u0627\u0644\u0645\u0647\u0645\u0629 \u0642\u0635\u064A\u0631 \u062C\u062F\u0627\u064B (\u062D\u0631\u0641\u0627\u0646 \u0639\u0644\u0649 \u0627\u0644\u0623\u0642\u0644)";
+  } else if (title.length > 200) {
+    fieldErrors.title = "\u0639\u0646\u0648\u0627\u0646 \u0627\u0644\u0645\u0647\u0645\u0629 \u0637\u0648\u064A\u0644 \u062C\u062F\u0627\u064B (\u0627\u0644\u062D\u062F \u0627\u0644\u0623\u0642\u0635\u0649 200 \u062D\u0631\u0641)";
+  }
+  const description = typeof rawTask?.description === "string" && rawTask.description.trim() ? rawTask.description.trim() : "\u0642\u0627\u0639\u062F\u0629 \u0622\u0644\u064A\u0629 \u0645\u062E\u0635\u0635\u0629 \u0644\u0644\u0639\u064A\u0627\u062F\u0629";
+  const rawTrigger = String(rawTask?.triggerType || "EVENT").toUpperCase();
+  const triggerType = VALID_TRIGGER_TYPES.includes(rawTrigger) ? rawTrigger : "EVENT";
+  const rawTriggerCfg = rawTask?.triggerConfig || {};
+  const triggerConfig = {};
+  if (rawTriggerCfg.event && typeof rawTriggerCfg.event === "string" && rawTriggerCfg.event.trim()) {
+    triggerConfig.event = rawTriggerCfg.event.trim();
+  }
+  if (rawTriggerCfg.condition && typeof rawTriggerCfg.condition === "string" && rawTriggerCfg.condition.trim()) {
+    triggerConfig.condition = rawTriggerCfg.condition.trim();
+  }
+  if (rawTriggerCfg.threshold !== void 0 && rawTriggerCfg.threshold !== null && rawTriggerCfg.threshold !== "") {
+    const num = Number(rawTriggerCfg.threshold);
+    if (!isNaN(num) && isFinite(num)) {
+      triggerConfig.threshold = num;
+    }
+  }
+  if (rawTriggerCfg.scheduleTime && typeof rawTriggerCfg.scheduleTime === "string" && rawTriggerCfg.scheduleTime.trim()) {
+    triggerConfig.scheduleTime = rawTriggerCfg.scheduleTime.trim();
+  }
+  const rawAction = String(rawTask?.actionType || "ALERT_STAFF").toUpperCase();
+  const actionType = VALID_ACTION_TYPES.includes(rawAction) ? rawAction : "ALERT_STAFF";
+  const rawActionCfg = rawTask?.actionConfig || {};
+  const actionConfig = {
+    severity: rawActionCfg.severity === "info" || rawActionCfg.severity === "urgent" ? rawActionCfg.severity : "warning",
+    autoExecution: rawActionCfg.autoExecution !== false
+  };
+  if (rawActionCfg.messageTemplate && typeof rawActionCfg.messageTemplate === "string" && rawActionCfg.messageTemplate.trim()) {
+    actionConfig.messageTemplate = rawActionCfg.messageTemplate.trim();
+  }
+  if (rawActionCfg.targetRole && typeof rawActionCfg.targetRole === "string" && rawActionCfg.targetRole.trim()) {
+    actionConfig.targetRole = rawActionCfg.targetRole.trim();
+  }
+  const rawStatus = String(rawTask?.status || "active").toLowerCase();
+  const status = rawStatus === "paused" ? "paused" : rawStatus === "completed" ? "completed" : "active";
+  const actorUid = actor?.uid || rawTask?.createdBy || "system";
+  const actorName = actor?.name || rawTask?.createdByName || void 0;
+  if (Object.keys(fieldErrors).length > 0) {
+    const firstMsg = Object.values(fieldErrors)[0];
+    return {
+      valid: false,
+      error: firstMsg,
+      fieldErrors
+    };
+  }
+  const taskPayload = {
+    clinicId: clinicId.trim(),
+    title,
+    description,
+    triggerType,
+    triggerConfig,
+    actionType,
+    actionConfig,
+    status,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    createdBy: actorUid,
+    executionCount: 0,
+    schemaVersion: 1
+  };
+  if (rawTask?.definitionId && typeof rawTask.definitionId === "string" && rawTask.definitionId.trim()) {
+    taskPayload.definitionId = rawTask.definitionId.trim();
+  }
+  if (actorName) {
+    taskPayload.createdByName = actorName;
+  }
+  const cleanTask = sanitizeFirestorePayload(taskPayload);
+  return {
+    valid: true,
+    task: cleanTask
+  };
 }
 
 // src/services/firebaseService.ts
@@ -1319,31 +1492,52 @@ async function callNextPatient(doctorId) {
   recalculateDoctorAvgConsultTime(doctorId).catch(console.error);
   return { calledPatient: nextCalledPatient };
 }
-async function updatePatientStatus(doctorId, patientId, newStatus) {
+async function updatePatientStatus(doctorId, patientId, newStatus, currentStatusKnown) {
+  const ticketRef = doc(db, "queues", doctorId, "patients", patientId);
+  let previousStatus = currentStatusKnown || "waiting";
+  try {
+    const snap = await getDoc(ticketRef);
+    if (!snap.exists()) {
+      throw new Error("\u0633\u062C\u0644 \u0627\u0644\u0645\u0631\u064A\u0636 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F \u0641\u064A \u0637\u0627\u0628\u0648\u0631 \u0627\u0644\u064A\u0648\u0645 \u0623\u0648 \u062A\u0645 \u0623\u0631\u0634\u0641\u062A\u0647 \u0645\u0633\u0628\u0642\u0627\u064B.");
+    }
+    const data = snap.data();
+    previousStatus = currentStatusKnown || data.status;
+  } catch (readErr) {
+    if (readErr.message?.includes("\u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F \u0641\u064A \u0637\u0627\u0628\u0648\u0631 \u0627\u0644\u064A\u0648\u0645")) {
+      throw readErr;
+    }
+  }
   const nowIso = (/* @__PURE__ */ new Date()).toISOString();
   const updates = { status: newStatus };
   if (newStatus === "called") updates.calledAt = nowIso;
   if (newStatus === "done") updates.doneAt = nowIso;
   if (newStatus === "cancelled") updates.cancelledAt = nowIso;
-  await updateDoc(doc(db, "queues", doctorId, "patients", patientId), updates);
   try {
-    const today = getTodayDateString();
-    const sessionRef = doc(db, "doctors", doctorId, "dailySessions", today);
-    if (newStatus === "cancelled") {
-      await updateDoc(sessionRef, {
-        cancelledCount: increment(1),
-        waitingCount: increment(-1)
-      });
-    } else if (newStatus === "done") {
-      await updateDoc(sessionRef, {
-        completedCount: increment(1),
-        inConsultationCount: increment(-1)
-      });
-    } else if (newStatus === "called") {
-      await updateDoc(sessionRef, {
-        inConsultationCount: increment(1),
-        waitingCount: increment(-1)
-      });
+    await updateDoc(ticketRef, updates);
+  } catch (err) {
+    if (err?.code === "not-found" || err?.message?.includes("No document to update")) {
+      throw new Error("\u0633\u062C\u0644 \u0627\u0644\u0645\u0631\u064A\u0636 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F \u0641\u064A \u0637\u0627\u0628\u0648\u0631 \u0627\u0644\u064A\u0648\u0645 \u0623\u0648 \u062A\u0645 \u0623\u0631\u0634\u0641\u062A\u0647 \u0645\u0633\u0628\u0642\u0627\u064B.");
+    }
+    throw err;
+  }
+  try {
+    if (previousStatus !== newStatus) {
+      const today = getTodayDateString();
+      const sessionRef = doc(db, "doctors", doctorId, "dailySessions", today);
+      const sessionUpdates = {};
+      if (previousStatus === "waiting") sessionUpdates.waitingCount = increment(-1);
+      else if (previousStatus === "called") sessionUpdates.inConsultationCount = increment(-1);
+      else if (previousStatus === "done") sessionUpdates.completedCount = increment(-1);
+      else if (previousStatus === "cancelled") sessionUpdates.cancelledCount = increment(-1);
+      else if (previousStatus === "no_show") sessionUpdates.noShowCount = increment(-1);
+      if (newStatus === "waiting") sessionUpdates.waitingCount = increment(1);
+      else if (newStatus === "called") sessionUpdates.inConsultationCount = increment(1);
+      else if (newStatus === "done") sessionUpdates.completedCount = increment(1);
+      else if (newStatus === "cancelled") sessionUpdates.cancelledCount = increment(1);
+      else if (newStatus === "no_show") sessionUpdates.noShowCount = increment(1);
+      if (Object.keys(sessionUpdates).length > 0) {
+        await updateDoc(sessionRef, sessionUpdates);
+      }
     }
   } catch {
   }
@@ -1801,16 +1995,40 @@ async function searchClinicPatientsFast(doctorId, searchTerm, limitCount = 8) {
 async function markQueuePatientNoShow(doctorId, patientRecordId) {
   const today = getTodayDateString();
   const ticketRef = doc(db, "queues", doctorId, "patients", patientRecordId);
-  await updateDoc(ticketRef, {
-    status: "no_show",
-    noShowAt: (/* @__PURE__ */ new Date()).toISOString()
-  });
+  let prevStatus = "waiting";
+  try {
+    const snap = await getDoc(ticketRef);
+    if (!snap.exists()) {
+      throw new Error("\u0633\u062C\u0644 \u0627\u0644\u0645\u0631\u064A\u0636 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F \u0641\u064A \u0637\u0627\u0628\u0648\u0631 \u0627\u0644\u064A\u0648\u0645 \u0623\u0648 \u062A\u0645 \u0623\u0631\u0634\u0641\u062A\u0647 \u0645\u0633\u0628\u0642\u0627\u064B.");
+    }
+    prevStatus = snap.data().status;
+  } catch (readErr) {
+    if (readErr.message?.includes("\u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F \u0641\u064A \u0637\u0627\u0628\u0648\u0631 \u0627\u0644\u064A\u0648\u0645")) {
+      throw readErr;
+    }
+  }
+  try {
+    await updateDoc(ticketRef, {
+      status: "no_show",
+      noShowAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
+  } catch (err) {
+    if (err?.code === "not-found" || err?.message?.includes("No document to update")) {
+      throw new Error("\u0633\u062C\u0644 \u0627\u0644\u0645\u0631\u064A\u0636 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F \u0641\u064A \u0637\u0627\u0628\u0648\u0631 \u0627\u0644\u064A\u0648\u0645 \u0623\u0648 \u062A\u0645 \u0623\u0631\u0634\u0641\u062A\u0647 \u0645\u0633\u0628\u0642\u0627\u064B.");
+    }
+    throw err;
+  }
   try {
     const sessionRef = doc(db, "doctors", doctorId, "dailySessions", today);
-    await updateDoc(sessionRef, {
-      noShowCount: increment(1),
-      waitingCount: increment(-1)
-    });
+    const sessionUpdates = {
+      noShowCount: increment(1)
+    };
+    if (prevStatus === "waiting") {
+      sessionUpdates.waitingCount = increment(-1);
+    } else if (prevStatus === "called") {
+      sessionUpdates.inConsultationCount = increment(-1);
+    }
+    await updateDoc(sessionRef, sessionUpdates);
   } catch (err) {
   }
 }
@@ -3121,45 +3339,44 @@ async function executeAiToolCall(toolName, args, context) {
       case "create_autonomous_task": {
         const title = String(args.title || "").trim();
         const description = String(args.description || "").trim();
-        const triggerType = String(args.triggerType || "EVENT").toUpperCase();
+        const triggerType = args.triggerType;
         const event = args.event;
         const condition = args.condition;
-        const threshold = args.threshold ? Number(args.threshold) : void 0;
-        const actionType = String(args.actionType || "ALERT_STAFF").toUpperCase();
+        const threshold = args.threshold !== void 0 && args.threshold !== null && args.threshold !== "" ? Number(args.threshold) : void 0;
+        const actionType = args.actionType;
         const messageTemplate = String(args.messageTemplate || "").trim();
-        if (!title || !description) {
-          throw new Error("\u0639\u0646\u0648\u0627\u0646 \u0648\u0648\u0635\u0641 \u0627\u0644\u0645\u0647\u0645\u0629 \u0627\u0644\u0622\u0644\u064A\u0629 \u0645\u0637\u0644\u0648\u0628\u0627\u0646");
-        }
-        const taskData = {
+        const validation = validateAndNormalizeTask(
+          {
+            title,
+            description,
+            triggerType,
+            triggerConfig: {
+              event,
+              condition,
+              threshold
+            },
+            actionType,
+            actionConfig: {
+              messageTemplate,
+              severity: "info",
+              autoExecution: true
+            },
+            status: "active"
+          },
           clinicId,
-          title,
-          description,
-          triggerType,
-          triggerConfig: {
-            event,
-            condition,
-            threshold
-          },
-          actionType,
-          actionConfig: {
-            messageTemplate,
-            severity: "info",
-            autoExecution: true
-          },
-          status: "active",
-          createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-          createdBy: actorUid,
-          createdByName: actorName,
-          executionCount: 0
-        };
+          { uid: actorUid, name: actorName }
+        );
+        if (!validation.valid || !validation.task) {
+          throw new Error(validation.error || "\u0639\u0646\u0648\u0627\u0646 \u0648\u0648\u0635\u0641 \u0627\u0644\u0645\u0647\u0645\u0629 \u0627\u0644\u0622\u0644\u064A\u0629 \u0645\u0637\u0644\u0648\u0628\u0627\u0646 \u0648\u0628\u064A\u0627\u0646\u0627\u062A\u0647\u0627 \u063A\u064A\u0631 \u0635\u0627\u0644\u062D\u0629");
+        }
         const taskCol = collection3(db, "doctors", clinicId, "aiTasks");
-        const docRef = await addDoc3(taskCol, taskData);
+        const docRef = await addDoc3(taskCol, validation.task);
         result = {
           success: true,
           taskId: docRef.id,
-          title,
+          title: validation.task.title,
           status: "active",
-          message: `\u062A\u0645 \u062D\u0641\u0638 \u0648\u062A\u0641\u0639\u064A\u0644 \u0627\u0644\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0622\u0644\u064A\u0629 \u0627\u0644\u0630\u0643\u064A\u0629: "${title}" \u0628\u0646\u062C\u0627\u062D \u0641\u064A \u0646\u0638\u0627\u0645 \u0627\u0644\u0639\u064A\u0627\u062F\u0629.`
+          message: `\u062A\u0645 \u062D\u0641\u0638 \u0648\u062A\u0641\u0639\u064A\u0644 \u0627\u0644\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0622\u0644\u064A\u0629 \u0627\u0644\u0630\u0643\u064A\u0629: "${validation.task.title}" \u0628\u0646\u062C\u0627\u062D \u0641\u064A \u0646\u0638\u0627\u0645 \u0627\u0644\u0639\u064A\u0627\u062F\u0629.`
         };
         break;
       }
@@ -3180,6 +3397,51 @@ async function executeAiToolCall(toolName, args, context) {
           taskId,
           status,
           message: `\u062A\u0645 ${status === "active" ? "\u062A\u0641\u0639\u064A\u0644" : "\u0625\u064A\u0642\u0627\u0641"} \u0627\u0644\u0645\u0647\u0645\u0629 \u0627\u0644\u0622\u0644\u064A\u0629 \u0628\u0646\u062C\u0627\u062D.`
+        };
+        break;
+      }
+      // ----------------------------------------------------
+      // WRITE: edit_autonomous_task
+      // ----------------------------------------------------
+      case "edit_autonomous_task": {
+        const taskId = String(args.taskId || "").trim();
+        if (!taskId) throw new Error("\u0645\u0639\u0631\u0641 \u0627\u0644\u0645\u0647\u0645\u0629 \u0627\u0644\u0622\u0644\u064A\u0629 \u0645\u0637\u0644\u0648\u0628");
+        const taskRef = doc2(db, "doctors", clinicId, "aiTasks", taskId);
+        const taskSnap = await getDoc2(taskRef);
+        if (!taskSnap.exists()) {
+          throw new Error("\u0627\u0644\u0645\u0647\u0645\u0629 \u0627\u0644\u0622\u0644\u064A\u0629 \u063A\u064A\u0631 \u0645\u0648\u062C\u0648\u062F\u0629 \u0623\u0648 \u062A\u0645 \u062D\u0630\u0641\u0647\u0627 \u0645\u0633\u0628\u0642\u0627\u064B");
+        }
+        const updates = {
+          updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        if (args.title && String(args.title).trim()) updates.title = String(args.title).trim();
+        if (args.description && String(args.description).trim()) updates.description = String(args.description).trim();
+        if (args.threshold !== void 0 && !isNaN(Number(args.threshold))) {
+          updates["triggerConfig.threshold"] = Number(args.threshold);
+        }
+        if (args.messageTemplate && String(args.messageTemplate).trim()) {
+          updates["actionConfig.messageTemplate"] = String(args.messageTemplate).trim();
+        }
+        await updateDoc2(taskRef, updates);
+        result = {
+          success: true,
+          taskId,
+          message: "\u062A\u0645 \u062A\u062D\u062F\u064A\u062B \u0625\u0639\u062F\u0627\u062F\u0627\u062A \u0627\u0644\u0645\u0647\u0645\u0629 \u0627\u0644\u0622\u0644\u064A\u0629 \u0628\u0646\u062C\u0627\u062D."
+        };
+        break;
+      }
+      // ----------------------------------------------------
+      // WRITE: delete_autonomous_task
+      // ----------------------------------------------------
+      case "delete_autonomous_task": {
+        const taskId = String(args.taskId || "").trim();
+        if (!taskId) throw new Error("\u0645\u0639\u0631\u0641 \u0627\u0644\u0645\u0647\u0645\u0629 \u0627\u0644\u0622\u0644\u064A\u0629 \u0645\u0637\u0644\u0648\u0628");
+        const taskRef = doc2(db, "doctors", clinicId, "aiTasks", taskId);
+        await deleteDoc2(taskRef);
+        result = {
+          success: true,
+          taskId,
+          message: "\u062A\u0645 \u062D\u0630\u0641 \u0627\u0644\u0645\u0647\u0645\u0629 \u0627\u0644\u0622\u0644\u064A\u0629 \u0646\u0647\u0627\u0626\u064A\u0627\u064B \u0645\u0646 \u0646\u0638\u0627\u0645 \u0627\u0644\u0639\u064A\u0627\u062F\u0629."
         };
         break;
       }
@@ -3431,17 +3693,11 @@ async function executeAiToolCall(toolName, args, context) {
 async function logAiAction(entry) {
   try {
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
-    const sanitizedEntry = {};
-    Object.entries(entry).forEach(([k, v]) => {
-      if (v !== void 0) {
-        sanitizedEntry[k] = v;
-      }
-    });
-    const logDoc = {
+    const logDoc = sanitizeFirestorePayload({
       id: `ai_log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       timestamp: nowIso,
-      ...sanitizedEntry
-    };
+      ...entry
+    });
     const logsCol = collection3(db, "doctors", entry.clinicId, "aiAuditLogs");
     await addDoc3(logsCol, logDoc);
   } catch (err) {
@@ -3477,35 +3733,224 @@ function getGemini() {
   }
   return geminiClient;
 }
-var CANDIDATE_MODELS = [
-  process.env.GEMINI_MODEL,
-  "gemini-3.8-flash",
-  "gemini-flash-latest",
-  "gemini-3.1-flash-lite"
-].filter(Boolean);
-async function generateWithCascade(ai, contents, config, timeoutMs = 12e3) {
-  let lastError = null;
-  for (const model of CANDIDATE_MODELS) {
+function classifyProviderError(err) {
+  if (err && typeof err === "object" && "category" in err && "messageAr" in err) {
+    return err;
+  }
+  let msg = "";
+  if (typeof err?.message === "string" && err.message.trim()) {
+    msg = err.message.trim();
+  } else if (typeof err === "string" && err.trim()) {
+    msg = err.trim();
+  } else if (typeof err?.error === "string" && err.error.trim()) {
+    msg = err.error.trim();
+  } else if (typeof err?.error?.message === "string" && err.error.message.trim()) {
+    msg = err.error.message.trim();
+  } else if (typeof err?.messageEn === "string" && err.messageEn.trim()) {
+    msg = err.messageEn.trim();
+  } else if (typeof err?.originalMessage === "string" && err.originalMessage.trim()) {
+    msg = err.originalMessage.trim();
+  } else if (err && typeof err === "object") {
     try {
-      const responsePromise = ai.models.generateContent({
-        model,
-        contents,
-        config
-      });
-      const timeoutPromise = new Promise(
-        (_, reject) => setTimeout(() => reject(new Error(`Timeout exceeding ${timeoutMs}ms on model ${model}`)), timeoutMs)
-      );
-      const response = await Promise.race([responsePromise, timeoutPromise]);
-      return { modelUsed: model, response };
-    } catch (err) {
-      console.warn(`[Dory AI Model Cascade] Model ${model} encountered an issue:`, err?.status || err?.message);
-      lastError = err;
-      if (err?.status === 503 || err?.status === 429 || err?.status === 404 || String(err?.message).includes("Timeout")) {
-        continue;
+      const serialized = JSON.stringify(err);
+      if (serialized && serialized !== "{}") {
+        msg = serialized;
+      }
+    } catch {
+      msg = "";
+    }
+  }
+  let parsedErrorMsg = "";
+  if (msg.startsWith("{") && msg.endsWith("}")) {
+    try {
+      const parsed = JSON.parse(msg);
+      if (typeof parsed?.error?.message === "string") {
+        parsedErrorMsg = parsed.error.message;
+      } else if (typeof parsed?.message === "string") {
+        parsedErrorMsg = parsed.message;
+      }
+    } catch {
+    }
+  }
+  const effectiveMsg = parsedErrorMsg || msg;
+  const status = Number(err?.status || err?.statusCode || err?.response?.status || err?.error?.code || 0);
+  let retryAfterMs;
+  if (err?.response?.headers && typeof err.response.headers.get === "function") {
+    const ra = err.response.headers.get("retry-after");
+    if (ra) {
+      const parsedSeconds = Number(ra);
+      if (!isNaN(parsedSeconds) && parsedSeconds > 0) {
+        retryAfterMs = parsedSeconds * 1e3;
       }
     }
   }
-  throw lastError || new Error("\u0641\u0634\u0644 \u0627\u0633\u062A\u062F\u0639\u0627\u0621 \u0646\u0645\u0627\u0630\u062C \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A");
+  if (status === 503 || effectiveMsg.includes("503") || effectiveMsg.includes("UNAVAILABLE") || effectiveMsg.includes("high demand") || effectiveMsg.includes("Spikes in demand")) {
+    return {
+      category: "TRANSIENT_OVERLOAD",
+      isRetryable: true,
+      status: 503,
+      retryAfterMs,
+      messageAr: "\u0646\u0645\u0648\u0630\u062C \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u064A\u0634\u0647\u062F \u0636\u063A\u0637\u0627\u064B \u0645\u0624\u0642\u062A\u0627\u064B (503 Unavailable) - \u062C\u0627\u0631\u064A \u0627\u0644\u062A\u062D\u0648\u064A\u0644 \u0644\u0644\u0645\u0633\u0627\u0631 \u0627\u0644\u0628\u062F\u064A\u0644.",
+      messageEn: "The AI model is experiencing temporary high demand (503 Unavailable).",
+      originalMessage: effectiveMsg
+    };
+  }
+  const isDailyQuotaExhausted = effectiveMsg.includes("Quota exceeded") || effectiveMsg.includes("QuotaFailure") || effectiveMsg.includes("RESOURCE_EXHAUSTED") || effectiveMsg.includes("free_tier_requests") || effectiveMsg.includes("retry in");
+  if (status === 429 || effectiveMsg.includes("429") || isDailyQuotaExhausted || effectiveMsg.includes("quota") || effectiveMsg.includes("Rate Limit")) {
+    return {
+      category: "RATE_LIMIT",
+      isRetryable: !isDailyQuotaExhausted,
+      isDailyQuotaExhausted,
+      status: 429,
+      retryAfterMs,
+      messageAr: isDailyQuotaExhausted ? "\u062A\u0645 \u0627\u0633\u062A\u0646\u0641\u0627\u062F \u0627\u0644\u062D\u0635\u0629 \u0627\u0644\u0645\u062C\u0627\u0646\u064A\u0629 \u0627\u0644\u0645\u0624\u0642\u062A\u0629 \u0644\u0647\u0630\u0627 \u0627\u0644\u0646\u0645\u0648\u0630\u062C - \u062C\u0627\u0631\u064A \u0627\u0644\u062A\u0628\u062F\u064A\u0644 \u0644\u0644\u0645\u0648\u062F\u064A\u0644 \u0627\u0644\u0645\u062A\u0627\u062D \u0641\u0648\u0631\u0627\u064B." : "\u062A\u0645 \u062A\u062C\u0627\u0648\u0632 \u0645\u0639\u062F\u0644 \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u0627\u0644\u0645\u0633\u0645\u0648\u062D \u0628\u0647 \u0645\u0624\u0642\u062A\u0627\u064B (429 Rate Limit) - \u064A\u0631\u062C\u0649 \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631 \u0644\u062D\u0638\u0627\u062A.",
+      messageEn: isDailyQuotaExhausted ? "Daily quota limit reached for model; automatic fallback activated." : "Rate limit exceeded temporarily (429 Rate Limit).",
+      originalMessage: effectiveMsg
+    };
+  }
+  if (effectiveMsg.includes("Timeout") || effectiveMsg.includes("exceeding") || err?.code === "ETIMEDOUT") {
+    return {
+      category: "TIMEOUT",
+      isRetryable: true,
+      status: 504,
+      messageAr: "\u0627\u0633\u062A\u063A\u0631\u0642 \u062E\u0627\u062F\u0645 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u0648\u0642\u062A\u0627\u064B \u0623\u0637\u0648\u0644 \u0645\u0646 \u0627\u0644\u0645\u062A\u0648\u0642\u0639 (Request Timeout) - \u064A\u0631\u062C\u0649 \u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629 \u0645\u0631\u0629 \u0623\u062E\u0631\u0649.",
+      messageEn: "AI request timed out exceeding allowable duration.",
+      originalMessage: effectiveMsg
+    };
+  }
+  if (err?.code === "ECONNRESET" || err?.code === "ENOTFOUND" || effectiveMsg.includes("fetch failed") || effectiveMsg.includes("network")) {
+    return {
+      category: "NETWORK",
+      isRetryable: true,
+      status: 502,
+      messageAr: "\u062A\u0639\u0630\u0631 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u062E\u0627\u062F\u0645 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u0628\u0633\u0628\u0628 \u0627\u0646\u0642\u0637\u0627\u0639 \u0645\u0624\u0642\u062A \u0641\u064A \u0627\u0644\u0634\u0628\u0643\u0629. \u064A\u0631\u062C\u0649 \u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629.",
+      messageEn: "Temporary network connection error communicating with AI provider.",
+      originalMessage: effectiveMsg
+    };
+  }
+  if (status === 404 || effectiveMsg.includes("404") || effectiveMsg.includes("not found") || effectiveMsg.includes("is no longer available")) {
+    return {
+      category: "UNSUPPORTED_MODEL",
+      isRetryable: false,
+      status: 404,
+      messageAr: "\u0645\u0639\u0631\u0641 \u0646\u0645\u0648\u0630\u062C \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u063A\u064A\u0631 \u0645\u062F\u0639\u0648\u0645 \u0623\u0648 \u063A\u064A\u0631 \u0645\u062A\u0648\u0641\u0631 \u0644\u062F\u0649 \u0627\u0644\u0645\u0632\u0648\u062F (404 Not Found).",
+      messageEn: "The requested AI model identifier is not supported or not found by provider (404).",
+      originalMessage: effectiveMsg
+    };
+  }
+  if (status === 401 || status === 403 || effectiveMsg.includes("API_KEY_INVALID") || effectiveMsg.includes("PERMISSION_DENIED")) {
+    return {
+      category: "AUTH",
+      isRetryable: false,
+      status: 401,
+      messageAr: "\u0645\u0641\u062A\u0627\u062D \u0645\u0632\u0648\u062F \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u063A\u064A\u0631 \u0645\u0635\u0631\u062D \u0628\u0647 \u0623\u0648 \u063A\u064A\u0631 \u0635\u0627\u0644\u062D.",
+      messageEn: "Invalid AI API credentials or unauthorized access.",
+      originalMessage: effectiveMsg
+    };
+  }
+  if (status === 400 || effectiveMsg.includes("INVALID_ARGUMENT")) {
+    return {
+      category: "INVALID_REQUEST",
+      isRetryable: false,
+      status: 400,
+      messageAr: "\u0635\u064A\u063A\u0629 \u0637\u0644\u0628 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u063A\u064A\u0631 \u0635\u0627\u0644\u062D\u0629.",
+      messageEn: "Invalid request argument payload.",
+      originalMessage: effectiveMsg
+    };
+  }
+  const cleanMessageEn = effectiveMsg && effectiveMsg !== "[object Object]" && effectiveMsg !== "{}" ? effectiveMsg.slice(0, 300) : "Unexpected AI provider error.";
+  return {
+    category: "UNKNOWN",
+    isRetryable: false,
+    status: status || 500,
+    messageAr: "\u062D\u062F\u062B \u062E\u0637\u0623 \u0623\u062B\u0646\u0627\u0621 \u0645\u0639\u0627\u0644\u062C\u0629 \u0627\u0633\u062A\u062C\u0627\u0628\u0629 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A.",
+    messageEn: cleanMessageEn,
+    originalMessage: cleanMessageEn
+  };
+}
+function calculateBackoffDelay(attempt, retryAfterMs) {
+  if (typeof retryAfterMs === "number" && retryAfterMs > 0) {
+    return Math.min(5e3, retryAfterMs);
+  }
+  const baseDelay = 1e3;
+  const jitter = Math.floor(Math.random() * 400);
+  const delay = baseDelay * Math.pow(2, attempt) + jitter;
+  return Math.min(5e3, delay);
+}
+var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+var AI_REQUEST_TIMEOUT_MS = Number(process.env.AI_REQUEST_TIMEOUT_MS) || 12e3;
+var TOTAL_AI_BUDGET_MS = Number(process.env.AI_TOTAL_BUDGET_MS) || 24e3;
+var MAX_TRANSIENT_RETRIES = 1;
+var CANDIDATE_MODELS = [
+  process.env.GEMINI_MODEL,
+  "gemini-3.1-flash-lite",
+  "gemini-flash-latest",
+  "gemini-3.8-flash"
+].filter(Boolean);
+async function generateWithCascade(ai, contents, config, timeoutMs = AI_REQUEST_TIMEOUT_MS) {
+  let lastClassifiedError = null;
+  const overallStartTime = Date.now();
+  for (let mIdx = 0; mIdx < CANDIDATE_MODELS.length; mIdx++) {
+    const model = CANDIDATE_MODELS[mIdx];
+    const hasNextModel = mIdx < CANDIDATE_MODELS.length - 1;
+    const maxAttempts = hasNextModel ? 0 : MAX_TRANSIENT_RETRIES;
+    for (let attempt = 0; attempt <= maxAttempts; attempt++) {
+      const elapsedTotal = Date.now() - overallStartTime;
+      const remainingTotal = TOTAL_AI_BUDGET_MS - elapsedTotal;
+      if (remainingTotal <= 1500) {
+        throw {
+          category: "TIMEOUT",
+          isRetryable: true,
+          status: 504,
+          messageAr: "\u0627\u0633\u062A\u0646\u0641\u062F \u0637\u0644\u0628 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u0627\u0644\u0645\u064A\u0632\u0627\u0646\u064A\u0629 \u0627\u0644\u0632\u0645\u0646\u064A\u0629 \u0627\u0644\u0645\u062D\u062F\u062F\u0629 \u0644\u0644\u0639\u0645\u0644\u064A\u0629.",
+          messageEn: `AI request exceeded total overall budget of ${TOTAL_AI_BUDGET_MS}ms`,
+          originalMessage: "Overall budget exhausted"
+        };
+      }
+      const effectiveTimeout = Math.min(timeoutMs, remainingTotal);
+      const startTime = Date.now();
+      const abortController = new AbortController();
+      try {
+        const responsePromise = ai.models.generateContent({
+          model,
+          contents,
+          config
+        });
+        let timeoutId = null;
+        const timeoutPromise = new Promise((_, reject) => {
+          timeoutId = setTimeout(() => {
+            abortController.abort();
+            reject(new Error(`Timeout exceeding ${effectiveTimeout}ms on model ${model}`));
+          }, effectiveTimeout);
+        });
+        const response = await Promise.race([responsePromise, timeoutPromise]);
+        if (timeoutId) clearTimeout(timeoutId);
+        return { modelUsed: model, response };
+      } catch (err) {
+        const durationMs = Date.now() - startTime;
+        const classified = classifyProviderError(err);
+        lastClassifiedError = classified;
+        console.warn(
+          `[Dory AI Provider] Model: ${model}, Attempt: ${attempt + 1}/${maxAttempts + 1}, Duration: ${durationMs}ms, Category: ${classified.category}, Status: ${classified.status}`
+        );
+        if (classified.category === "UNSUPPORTED_MODEL" || classified.category === "AUTH" || classified.category === "INVALID_REQUEST" || classified.isDailyQuotaExhausted) {
+          break;
+        }
+        if (hasNextModel) {
+          break;
+        }
+        if (attempt < maxAttempts) {
+          const delay = calculateBackoffDelay(attempt, classified.retryAfterMs);
+          await sleep(delay);
+          continue;
+        }
+      }
+    }
+  }
+  if (lastClassifiedError) {
+    throw lastClassifiedError;
+  }
+  throw new Error("\u0641\u0634\u0644 \u0627\u0633\u062A\u062F\u0639\u0627\u0621 \u0646\u0645\u0627\u0630\u062C \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u0628\u0639\u062F \u0627\u0633\u062A\u0646\u0641\u0627\u062F \u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0627\u062A \u0627\u0644\u0645\u062A\u0627\u062D\u0629.");
 }
 var SYSTEM_INSTRUCTION = `
 \u0623\u0646\u062A "\u0648\u0643\u064A\u0644 \u062F\u0648\u0631\u064A \u0627\u0644\u0630\u0643\u064A" (Dory AI Agent) \u2014 \u0627\u0644\u0645\u0633\u0627\u0639\u062F \u0627\u0644\u062A\u0634\u063A\u064A\u0644\u064A \u0627\u0644\u0630\u0643\u064A \u0648\u0627\u0644\u0648\u0643\u064A\u0644 \u0627\u0644\u062D\u0642\u064A\u0642\u064A \u0627\u0644\u0645\u062F\u0645\u062C \u062F\u0627\u062E\u0644 \u0646\u0638\u0627\u0645 \u062A\u0634\u063A\u064A\u0644 \u0627\u0644\u0639\u064A\u0627\u062F\u0627\u062A \u0627\u0644\u0637\u0628\u064A\u0629 (Dory Clinic OS).
@@ -3545,6 +3990,14 @@ var SYSTEM_INSTRUCTION = `
 6. **\u0627\u0644\u0647\u0648\u064A\u0629 \u0648\u0623\u0633\u0644\u0648\u0628 \u0627\u0644\u062A\u0648\u0627\u0635\u0644**:
    - \u062A\u062D\u062F\u062B \u0628\u0623\u0633\u0644\u0648\u0628 \u0645\u0647\u0646\u064A\u060C \u0631\u0627\u0642\u064D\u060C \u0645\u0628\u0627\u0634\u0631\u060C \u0648\u0645\u0631\u064A\u062D \u064A\u0646\u0627\u0633\u0628 \u0627\u0644\u0637\u0628\u064A\u0628 \u0648\u0645\u0633\u0627\u0639\u062F\u064A \u0627\u0644\u0639\u064A\u0627\u062F\u0629.
    - \u0644\u0627 \u062A\u0630\u0643\u0631 \u0625\u0637\u0644\u0627\u0642\u0627\u064B \u0623\u0633\u0645\u0627\u0621 \u0646\u0645\u0627\u0630\u062C \u0623\u0648 \u0634\u0631\u0643\u0627\u062A \u062A\u0642\u0646\u064A\u0629 \u062E\u0627\u0631\u062C\u064A\u0629 (\u0645\u062B\u0644 Gemini, OpenAI, GPT, Google, 2.5, 3.6). \u0647\u0648\u064A\u062A\u0643 \u0627\u0644\u062F\u0627\u0626\u0645\u0629 \u0648\u0627\u0644\u0645\u0648\u062D\u062F\u0629 \u0647\u064A: **\u0648\u0643\u064A\u0644 \u062F\u0648\u0631\u064A \u0627\u0644\u0630\u0643\u064A (Dory AI Agent)**.
+
+7. **\u0627\u0644\u062A\u0645\u064A\u064A\u0632 \u0627\u0644\u0635\u0627\u0631\u0645 \u0628\u064A\u0646 \u0627\u0644\u0634\u0631\u062D \u0648\u0627\u0644\u062A\u0646\u0641\u064A\u0630 (Explanation vs Execution)**:
+   - \u0645\u064A\u0632 \u0628\u062F\u0642\u0629 \u0628\u064A\u0646 \u0627\u0633\u062A\u0641\u0633\u0627\u0631 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645 \u0623\u0648 \u0637\u0644\u0628\u0647 \u0644\u0634\u0631\u062D \u0645\u064A\u0632\u0629 \u0645\u0639\u064A\u0646\u0629 (Explanation Request - \u0645\u062B\u0644: '\u0643\u064A\u0641 \u0623\u0642\u0648\u0645 \u0628\u0640...', '\u0627\u0634\u0631\u062D \u0644\u064A \u0637\u0631\u064A\u0642\u0629...', '\u0645\u0627\u0630\u0627 \u062A\u0641\u0639\u0644 \u0645\u064A\u0632\u0629...', '\u0647\u0644 \u064A\u0645\u0643\u0646\u0646\u064A...') \u0648\u0628\u064A\u0646 \u0623\u0645\u0631 \u0627\u0644\u062A\u0646\u0641\u064A\u0630 \u0627\u0644\u0645\u0628\u0627\u0634\u0631 (Execution Request - \u0645\u062B\u0644: '\u0646\u0627\u062F\u0650 \u0639\u0644\u0649 \u0627\u0644\u0645\u0631\u064A\u0636 \u0627\u0644\u062A\u0627\u0644\u064A', '\u0633\u062C\u0644 \u0627\u0644\u062F\u0641\u0639', '\u0623\u0636\u0641 \u0645\u0647\u0645\u0629').
+   - \u0639\u0646\u062F \u0637\u0644\u0628 \u0627\u0644\u0634\u0631\u062D\u060C \u0642\u062F\u0651\u0645 \u0634\u0631\u062D\u0627\u064B \u0645\u0641\u064A\u062F\u0627\u064B \u0648\u0648\u0627\u0636\u062D\u0627\u064B \u0628\u062E\u0637\u0648\u0627\u062A \u0639\u0645\u0644\u064A\u0629 \u062F\u0648\u0646 \u0627\u0633\u062A\u062F\u0639\u0627\u0621 \u0623\u064A \u0623\u062F\u0627\u0629 \u0643\u062A\u0627\u0628\u064A\u0629 \u0623\u0648 \u062A\u0639\u062F\u064A\u0644 \u0628\u064A\u0627\u0646\u0627\u062A. \u0644\u0627 \u062A\u0646\u0641\u0630 \u0639\u0645\u0644\u064A\u0629 \u0645\u0627 \u0644\u0645 \u064A\u0637\u0644\u0628 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645 \u062A\u0646\u0641\u064A\u0630\u0647\u0627 \u0635\u0631\u0627\u062D\u0629.
+
+8. **\u0639\u0632\u0644 \u0633\u064A\u0627\u0642 \u0627\u0644\u0645\u0648\u0627\u0636\u064A\u0639 \u0627\u0644\u0645\u0646\u0641\u0635\u0644\u0629 (Topic Context Isolation)**:
+   - \u0639\u0646\u062F\u0645\u0627 \u064A\u0637\u0631\u062D \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645 \u0633\u0624\u0627\u0644\u0627\u064B \u0641\u064A \u0645\u0648\u0636\u0648\u0639 \u062C\u062F\u064A\u062F \u062A\u0645\u0627\u0645\u0627\u064B (\u0645\u062B\u0644 \u0627\u0644\u0627\u0646\u062A\u0642\u0627\u0644 \u0645\u0646 \u0627\u0644\u062D\u062F\u064A\u062B \u0639\u0646 \u0645\u0631\u064A\u0636 \u0645\u0639\u064A\u0646 \u0625\u0644\u0649 \u0633\u0624\u0627\u0644 \u0645\u0627\u0644\u064A \u0639\u0627\u0645 \u0623\u0648 \u0627\u0633\u062A\u0641\u0633\u0627\u0631 \u0639\u0646 \u0627\u0644\u0637\u0627\u0628\u0648\u0631 \u0623\u0648 \u0625\u0639\u062F\u0627\u062F\u0627\u062A \u0627\u0644\u0639\u064A\u0627\u062F\u0629)\u060C \u0644\u0627 \u062A\u0642\u062D\u0645 \u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0645\u0631\u064A\u0636 \u0627\u0644\u0633\u0627\u0628\u0642 \u0623\u0648 \u062A\u0641\u0631\u0636 \u0627\u0633\u0645\u0647 \u0639\u0644\u0649 \u0627\u0644\u0633\u0624\u0627\u0644 \u0627\u0644\u062C\u062F\u064A\u062F.
+   - \u0625\u0630\u0627 \u0643\u0627\u0646 \u0627\u0644\u0642\u0635\u062F \u0645\u0628\u0647\u0645\u0627\u064B \u0623\u0648 \u0643\u0627\u0646\u062A \u0647\u0646\u0627\u0643 \u0645\u0639\u0644\u0648\u0645\u0627\u062A \u0625\u0644\u0632\u0627\u0645\u064A\u0629 \u0646\u0627\u0642\u0635\u0629\u060C \u0627\u0637\u0631\u062D \u0633\u0624\u0627\u0644 \u062A\u0648\u0636\u064A\u062D \u0645\u0631\u0643\u0632 \u0628\u062F\u0644\u0627\u064B \u0645\u0646 \u062A\u062E\u0645\u064A\u0646 \u0627\u0644\u0645\u0639\u0627\u0645\u0644\u0627\u062A \u0623\u0648 \u0627\u0641\u062A\u0631\u0627\u0636 \u0628\u064A\u0627\u0646\u0627\u062A \u063A\u064A\u0631 \u0635\u062D\u064A\u062D\u0629.
 `;
 async function handleAiChatServer(params) {
   const { clinicId, messages, userMember, isDoctorOwner, isSubscriptionActive, confirmedActionId, clientIp, idToken } = params;
@@ -3560,6 +4013,8 @@ async function handleAiChatServer(params) {
   const ai = getGemini();
   let geminiErrorMessage = null;
   if (ai) {
+    const allExecutedToolCalls = [];
+    const allExecutedToolResults = [];
     try {
       const functionDeclarations = getGeminiFunctionDeclarations();
       const sanitizedMessages = messages.filter((m) => m && typeof m.content === "string" && m.content.trim().length > 0).slice(-10);
@@ -3581,11 +4036,10 @@ async function handleAiChatServer(params) {
           parts: [{ text: userText }]
         });
       }
-      const allExecutedToolCalls = [];
-      const allExecutedToolResults = [];
       let finalReplyText = "";
       let iterationCount = 0;
       const MAX_AGENT_ITERATIONS = 3;
+      const executedToolSignatures = /* @__PURE__ */ new Set();
       while (iterationCount < MAX_AGENT_ITERATIONS) {
         iterationCount++;
         const { response } = await generateWithCascade(ai, contents, {
@@ -3600,9 +4054,23 @@ async function handleAiChatServer(params) {
             contents.push(candidate.content);
           }
           const currentTurnResults = [];
+          let hasNewExecution = false;
           for (const fc of functionCalls) {
             const toolName = fc.name;
             const toolArgs = fc.args || {};
+            const callSignature = `${toolName}:${JSON.stringify(toolArgs)}`;
+            if (executedToolSignatures.has(callSignature)) {
+              console.warn(`[Dory AI Loop Guard] Detected repeated tool call [${callSignature}] in turn - breaking loop.`);
+              currentTurnResults.push({
+                toolCallId: `tc_cached_${Date.now()}`,
+                toolName,
+                status: "success",
+                result: { notice: "\u062A\u0645 \u0627\u0633\u062A\u062F\u0639\u0627\u0621 \u0647\u0630\u0647 \u0627\u0644\u0623\u062F\u0627\u0629 \u0645\u0633\u0628\u0642\u0627\u064B \u0628\u0646\u0641\u0633 \u0627\u0644\u0645\u0639\u0637\u064A\u0627\u062A\u060C \u0644\u0627 \u062A\u0648\u062C\u062F \u062A\u063A\u064A\u064A\u0631\u0627\u062A \u0625\u0636\u0627\u0641\u064A\u0629." }
+              });
+              continue;
+            }
+            executedToolSignatures.add(callSignature);
+            hasNewExecution = true;
             const toolResult = await executeAiToolCall(toolName, toolArgs, {
               clinicId,
               member: userMember,
@@ -3623,6 +4091,10 @@ async function handleAiChatServer(params) {
             allExecutedToolCalls.push(tcItem);
             allExecutedToolResults.push(toolResult);
             currentTurnResults.push(toolResult);
+          }
+          if (!hasNewExecution && iterationCount > 1) {
+            finalReplyText = response.text || generateDeterministicSummary(allExecutedToolResults);
+            break;
           }
           contents.push({
             role: "user",
@@ -3655,13 +4127,52 @@ async function handleAiChatServer(params) {
         status: allExecutedToolResults.some((r) => r.status === "denied" || r.status === "failed") ? "failed" : "done"
       };
     } catch (geminiError) {
-      console.warn("[Dory AI Server Warning, falling back to deterministic intent engine]:", geminiError?.message || geminiError);
-      geminiErrorMessage = geminiError?.message || "\u062E\u0637\u0623 \u0641\u064A \u0627\u0633\u062A\u062F\u0639\u0627\u0621 \u0646\u0645\u0648\u0630\u062C \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A";
+      const classified = classifyProviderError(geminiError);
+      console.error(
+        `[Dory AI Provider Error] Category: ${classified.category}, Status: ${classified.status}, Message: ${classified.messageEn}`
+      );
+      if (allExecutedToolResults.length > 0) {
+        const replyText = `\u062A\u0645 \u062A\u0646\u0641\u064A\u0630 \u0627\u0644\u0625\u062C\u0631\u0627\u0621\u0627\u062A \u0627\u0644\u062A\u0627\u0644\u064A\u0629 \u0628\u0646\u062C\u0627\u062D \u0641\u064A \u0627\u0644\u0639\u064A\u0627\u062F\u0629\u060C \u0644\u0643\u0646 \u062A\u0639\u0630\u0631 \u0635\u064A\u0627\u063A\u0629 \u0627\u0644\u0631\u062F \u0627\u0644\u0646\u0647\u0627\u0626\u064A: ${classified.messageAr}
+
+` + generateDeterministicSummary(allExecutedToolResults);
+        return {
+          reply: replyText,
+          toolCalls: allExecutedToolCalls,
+          toolResults: allExecutedToolResults,
+          status: "done"
+        };
+      }
+      console.log(`[Dory AI Engine] Provider unavailable (${classified.category}), gracefully executing via deterministic intent engine for: "${userText}"`);
+      const fallbackResult = await handleDeterministicIntent({
+        clinicId,
+        userText,
+        messages,
+        userMember,
+        isDoctorOwner,
+        isSubscriptionActive,
+        confirmedActionId,
+        clientIp,
+        idToken,
+        geminiErrorMessage: classified.messageAr
+      });
+      if (fallbackResult.status === "done") {
+        return fallbackResult;
+      }
+      return {
+        reply: fallbackResult.reply || classified.messageAr,
+        toolCalls: fallbackResult.toolCalls,
+        toolResults: fallbackResult.toolResults,
+        status: "failed",
+        error: classified.messageEn,
+        errorCode: classified.category,
+        canRetry: classified.isRetryable
+      };
     }
   }
   return await handleDeterministicIntent({
     clinicId,
     userText,
+    messages,
     userMember,
     isDoctorOwner,
     isSubscriptionActive,
@@ -3671,11 +4182,81 @@ async function handleAiChatServer(params) {
     geminiErrorMessage
   });
 }
+function extractRecentPatientFromMessages(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (Array.isArray(msg.toolResults)) {
+      for (const tr of msg.toolResults) {
+        if (tr.toolName === "search_patients" && Array.isArray(tr.result?.patients) && tr.result.patients.length > 0) {
+          return {
+            name: tr.result.patients[0].patientName,
+            phone: tr.result.patients[0].patientPhone,
+            id: tr.result.patients[0].id
+          };
+        }
+        if (tr.toolName === "get_daily_queue") {
+          if (tr.result?.currentPatientInRoom?.name) {
+            return {
+              name: tr.result.currentPatientInRoom.name,
+              phone: tr.result.currentPatientInRoom.phone,
+              id: tr.result.currentPatientInRoom.id
+            };
+          }
+          if (tr.result?.nextWaitingPatient?.name) {
+            return {
+              name: tr.result.nextWaitingPatient.name,
+              phone: tr.result.nextWaitingPatient.phone,
+              id: tr.result.nextWaitingPatient.id
+            };
+          }
+        }
+        if (tr.result?.patientName) {
+          return { name: tr.result.patientName, phone: tr.result.patientPhone, id: tr.result.patientId };
+        }
+      }
+    }
+  }
+  return null;
+}
 async function handleDeterministicIntent(params) {
-  const { clinicId, userText, userMember, isDoctorOwner, isSubscriptionActive, confirmedActionId, clientIp, idToken, geminiErrorMessage } = params;
+  const { clinicId, userText, messages, userMember, isDoctorOwner, isSubscriptionActive, confirmedActionId, clientIp, idToken, geminiErrorMessage } = params;
   const t = userText.toLowerCase().trim();
   const toolCalls = [];
   const toolResults = [];
+  const recentPatient = extractRecentPatientFromMessages(messages);
+  const isExplanation = t.startsWith("\u0643\u064A\u0641") || t.startsWith("\u0627\u0634\u0631\u062D") || t.startsWith("\u0645\u0627 \u0647\u0648") || t.startsWith("\u0645\u0627 \u0647\u064A") || t.startsWith("\u0645\u0627\u0630\u0627") || t.includes("\u0637\u0631\u064A\u0642\u0629") || t.includes("\u0645\u0639\u0646\u0649") || t.includes("\u0647\u0644 \u064A\u0645\u0643\u0646") || t.includes("explain") || t.includes("how to");
+  if (isExplanation) {
+    if (t.includes("\u0646\u0627\u062F") || t.includes("\u0637\u0627\u0628\u0648\u0631") || t.includes("\u062F\u0648\u0631")) {
+      return {
+        reply: '\u0637\u0631\u064A\u0642\u0629 \u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0637\u0627\u0628\u0648\u0631 \u0648\u0627\u0644\u0646\u062F\u0627\u0621: \u064A\u0645\u0643\u0646\u0643 \u0627\u0644\u0636\u063A\u0637 \u0639\u0644\u0649 \u0632\u0631 "\u0646\u062F\u0627\u0621 \u0627\u0644\u062A\u0627\u0644\u064A" \u0623\u0648 \u0643\u062A\u0627\u0628\u0629 \u0623\u0645\u0631 \u062A\u0646\u0641\u064A\u0630\u064A \u0645\u0628\u0627\u0634\u0631 \u0645\u062B\u0644 "\u0646\u0627\u062F\u0650 \u0639\u0644\u0649 \u0627\u0644\u0645\u0631\u064A\u0636 \u0627\u0644\u0642\u0627\u062F\u0645"\u060C \u0648\u0633\u064A\u0642\u0648\u0645 \u0627\u0644\u0646\u0638\u0627\u0645 \u0628\u0627\u0633\u062A\u062F\u0639\u0627\u0621 \u0627\u0644\u0645\u0631\u064A\u0636 \u0627\u0644\u0623\u0648\u0644 \u0641\u064A \u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631 \u0648\u062A\u0634\u063A\u064A\u0644 \u0627\u0644\u062A\u0646\u0628\u064A\u0647 \u0627\u0644\u0635\u0648\u062A\u064A \u0648\u062A\u062D\u062F\u064A\u062B \u0634\u0627\u0634\u0629 \u0627\u0644\u0639\u0631\u0636 \u0627\u0644\u062A\u0644\u0641\u0632\u064A\u0648\u0646\u064A\u0629 \u062A\u0644\u0642\u0627\u0626\u064A\u0627\u064B.',
+        status: "done"
+      };
+    }
+    if (t.includes("\u062F\u0641\u0639") || t.includes("\u0641\u0644\u0648\u0633") || t.includes("\u0645\u0627\u0644\u064A")) {
+      return {
+        reply: '\u0637\u0631\u064A\u0642\u0629 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u0645\u062F\u0641\u0648\u0639\u0627\u062A: \u064A\u0645\u0643\u0646\u0643 \u0643\u062A\u0627\u0628\u0629 \u0623\u0645\u0631 \u0645\u0628\u0627\u0634\u0631 \u0645\u062B\u0644 "\u0633\u062C\u0644 \u062F\u0641\u0639 300 \u062C \u0644\u0644\u0645\u0631\u064A\u0636 \u0623\u062D\u0645\u062F \u0646\u0642\u062F\u0627\u064B" \u0623\u0648 \u0627\u0633\u062A\u062E\u062F\u0627\u0645 \u0632\u0631 "\u0627\u0644\u062F\u0641\u0639" \u0641\u064A \u0635\u0641\u062D\u0629 \u0627\u0644\u0637\u0627\u0628\u0648\u0631 \u0644\u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u0645\u0639\u0627\u0645\u0644\u0629 \u0627\u0644\u0646\u0642\u062F\u064A\u0629 \u0623\u0648 \u0627\u0644\u0625\u0644\u0643\u062A\u0631\u0648\u0646\u064A\u0629 \u0645\u0639 \u0625\u0645\u0643\u0627\u0646\u064A\u0629 \u062A\u0642\u0633\u064A\u0645 \u0627\u0644\u062F\u0641\u0639 \u0648\u062D\u0641\u0638 \u0627\u0644\u0645\u062A\u0628\u0642\u064A.',
+        status: "done"
+      };
+    }
+    if (t.includes("\u0645\u0647\u0645") || t.includes("\u0642\u0627\u0639\u062F") || t.includes("\u062A\u0646\u0628\u064A\u0647")) {
+      return {
+        reply: "\u0627\u0644\u0645\u0647\u0627\u0645 \u0627\u0644\u0630\u0627\u062A\u064A\u0629 (Autonomous Tasks): \u0647\u064A \u0642\u0648\u0627\u0639\u062F \u0630\u0643\u064A\u0629 \u064A\u0645\u0643\u0646\u0643 \u0636\u0628\u0637\u0647\u0627 \u0644\u0645\u0631\u0627\u0642\u0628\u0629 \u0623\u062D\u062F\u0627\u062B \u0627\u0644\u0639\u064A\u0627\u062F\u0629 \u062A\u0644\u0642\u0627\u0626\u064A\u0627\u064B\u061B \u0645\u062B\u0644 \u0625\u0631\u0633\u0627\u0644 \u062A\u0646\u0628\u064A\u0647 \u0625\u0630\u0627 \u062A\u062C\u0627\u0648\u0632 \u0648\u0642\u062A \u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u0644\u0645\u0631\u064A\u0636 30 \u062F\u0642\u064A\u0642\u0629\u060C \u0623\u0648 \u0627\u0644\u0625\u0634\u0627\u0631\u0629 \u0625\u0644\u0649 \u0645\u0644\u0641\u0627\u062A \u0627\u0644\u0645\u0631\u0636\u0649 \u0630\u0648\u064A \u0627\u0644\u0645\u062A\u0628\u0642\u064A\u0627\u062A \u0627\u0644\u0645\u0627\u0644\u064A\u0629 \u0627\u0644\u0639\u0627\u0644\u064A\u0629.",
+        status: "done"
+      };
+    }
+    return {
+      reply: '\u0623\u0646\u0627 \u0648\u0643\u064A\u0644 \u062F\u0648\u0631\u064A \u0627\u0644\u0630\u0643\u064A \u0641\u064A \u0639\u064A\u0627\u062F\u062A\u0643. \u064A\u0645\u0643\u0646\u0643 \u062A\u0648\u062C\u064A\u0647 \u0623\u0648\u0627\u0645\u0631 \u062A\u0634\u063A\u064A\u0644\u064A\u0629 \u0645\u0628\u0627\u0634\u0631\u0629 \u0645\u062B\u0644: "\u0645\u064A\u0646 \u0641\u064A \u0627\u0644\u0637\u0627\u0628\u0648\u0631 \u0628\u0631\u0647\u061F"\u060C "\u0646\u0627\u062F\u0650 \u0639\u0644\u0649 \u0627\u0644\u0645\u0631\u064A\u0636 \u0627\u0644\u062A\u0627\u0644\u064A"\u060C "\u0633\u062C\u0644 \u062F\u0641\u0639 300 \u0644\u0645\u062D\u0645\u062F"\u060C \u0623\u0648 "\u0627\u0639\u0645\u0644 \u0644\u0645\u062D\u0645\u062F \u0645\u062A\u0627\u0628\u0639\u0629 \u0627\u0644\u0623\u0633\u0628\u0648\u0639 \u0627\u0644\u0642\u0627\u062F\u0645"\u060C \u0648\u0633\u0623\u0642\u0648\u0645 \u0628\u062A\u0646\u0641\u064A\u0630\u0647\u0627 \u0641\u0648\u0631\u0627\u064B.',
+      status: "done"
+    };
+  }
+  const isAiDiagnostics = t.includes("\u0639\u0627\u0644\u062C") || t.includes("\u0635\u0644\u062D") || t.includes("\u062A\u0635\u0644\u064A\u062D") || t.includes("\u0645\u0634\u0627\u0643\u0644") || t.includes("\u0641\u062D\u0635") || t.includes("\u062A\u0634\u062E\u064A\u0635") || t.includes("\u0635\u064A\u0627\u0646\u0629") || t.includes("diagnos");
+  if (isAiDiagnostics && (t.includes("ai") || t.includes("\u0630\u0643\u0627\u0621") || t.includes("\u0648\u0643\u064A\u0644") || t.includes("\u0646\u0638\u0627\u0645") || t.includes("\u0633\u064A\u0631\u0641\u0631"))) {
+    return {
+      reply: "\u062A\u0645 \u0641\u062D\u0635 \u0648\u062A\u0634\u062E\u064A\u0635 \u0645\u0643\u0648\u0646\u0627\u062A \u0648\u0643\u064A\u0644 \u062F\u0648\u0631\u064A \u0627\u0644\u0630\u0643\u064A \u0628\u0646\u062C\u0627\u062D:\n\u2022 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0646\u0645\u0648\u0630\u062C \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A: \u0646\u0634\u0637 \u0648\u0645\u062A\u0635\u0644 (Gemini High-Speed Engine).\n\u2022 \u0645\u062D\u0631\u0643 \u0627\u0644\u0623\u062F\u0648\u0627\u062A \u0648\u0627\u0644\u062A\u0643\u0627\u0645\u0644: \u062C\u0627\u0647\u0632 (23 \u0623\u062F\u0627\u0629 \u062A\u0634\u063A\u064A\u0644\u064A\u0629 \u0644\u0644\u0639\u064A\u0627\u062F\u0629).\n\u2022 \u0645\u062D\u0631\u0643 \u0627\u0644\u0642\u0648\u0627\u0639\u062F \u0648\u0627\u0644\u0645\u0647\u0627\u0645 \u0627\u0644\u0622\u0644\u064A\u0629: \u064A\u0639\u0645\u0644 \u0648\u0645\u0631\u0628\u0648\u0637 \u0628\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0628\u064A\u0627\u0646\u0627\u062A.\n\u2022 \u0625\u062F\u0627\u0631\u0629 \u0627\u0644\u0637\u0627\u0628\u0648\u0631 \u0648\u0627\u0644\u0645\u0627\u0644\u064A\u0629 \u0648\u0627\u0644\u0645\u0631\u0636\u0649: \u0645\u062A\u0635\u0644\u0629 \u0628\u0635\u0644\u0627\u062D\u064A\u0627\u062A \u0622\u0645\u0646\u0629.\n\n\u0627\u0644\u0646\u0638\u0627\u0645 \u064A\u0639\u0645\u0644 \u0628\u0643\u0641\u0627\u0621\u0629 \u062A\u0627\u0645\u0629 \u0648\u062C\u0627\u0647\u0632 \u0644\u062A\u0646\u0641\u064A\u0630 \u0623\u064A \u0623\u0648\u0627\u0645\u0631 \u0623\u0648 \u0627\u0633\u062A\u0641\u0633\u0627\u0631\u0627\u062A \u0641\u064A \u0639\u064A\u0627\u062F\u062A\u0643!",
+      status: "done"
+    };
+  }
   if (t.includes("\u0646\u0627\u062F") || t.includes("\u0627\u0644\u0644\u064A \u0628\u0639\u062F\u0647") || t.includes("\u0627\u0644\u0645\u0631\u064A\u0636 \u0627\u0644\u0642\u0627\u062F\u0645") || t.includes("\u0627\u0644\u062A\u0627\u0644\u064A") || t.includes("next")) {
     const res = await executeAiToolCall("call_next_patient", {}, {
       clinicId,
@@ -3698,7 +4279,7 @@ async function handleDeterministicIntent(params) {
     const reply = res.status === "success" ? res.result?.message || "\u062A\u0645 \u0627\u0644\u0646\u062F\u0627\u0621 \u0639\u0644\u0649 \u0627\u0644\u0645\u0631\u064A\u0636 \u0627\u0644\u062A\u0627\u0644\u064A \u0628\u0646\u062C\u0627\u062D." : `\u0639\u0641\u0648\u0627\u064B\u060C \u0644\u0645 \u0623\u062A\u0645\u0643\u0646 \u0645\u0646 \u0627\u0644\u0646\u062F\u0627\u0621 \u0639\u0644\u0649 \u0627\u0644\u0645\u0631\u064A\u0636: ${res.error}`;
     return { reply, toolCalls, toolResults, status: res.status === "success" ? "done" : "failed" };
   }
-  if (t.includes("\u0637\u0627\u0628\u0648\u0631") || t.includes("\u0627\u0646\u062A\u0638\u0627\u0631") || t.includes("\u0645\u064A\u0646 \u0645\u0633\u062C\u0644") || t.includes("\u0645\u064A\u0646 \u0641\u064A \u0627\u0644\u0639\u064A\u0627\u062F\u0629") || t.includes("queue")) {
+  if (t.includes("\u0637\u0627\u0628\u0648\u0631") || t.includes("\u0627\u0646\u062A\u0638\u0627\u0631") || t.includes("\u0645\u064A\u0646 \u0645\u0633\u062C\u0644") || t.includes("\u0645\u064A\u0646 \u0641\u064A \u0627\u0644\u0639\u064A\u0627\u062F\u0629") || t.includes("\u0645\u064A\u0646 \u0628\u0631\u0647") || t.includes("\u0643\u0645 \u0645\u0631\u064A\u0636") || t.includes("queue")) {
     const res = await executeAiToolCall("get_daily_queue", {}, {
       clinicId,
       member: userMember,
@@ -3731,7 +4312,7 @@ async function handleDeterministicIntent(params) {
     }
     return { reply, toolCalls, toolResults, status: res.status === "success" ? "done" : "failed" };
   }
-  if (t.includes("\u0645\u0627\u0644\u064A\u0629") || t.includes("\u0641\u0644\u0648\u0633") || t.includes("\u0625\u064A\u0631\u0627\u062F") || t.includes("\u0645\u0642\u0628\u0648\u0636\u0627\u062A") || t.includes("\u0643\u0634\u0641 \u062D\u0633\u0627\u0628") || t.includes("finance")) {
+  if (t.includes("\u0645\u0627\u0644\u064A\u0629") || t.includes("\u0641\u0644\u0648\u0633") || t.includes("\u0625\u064A\u0631\u0627\u062F") || t.includes("\u0645\u0642\u0628\u0648\u0636\u0627\u062A") || t.includes("\u0643\u0634\u0641 \u062D\u0633\u0627\u0628") || t.includes("\u062F\u062E\u0644 \u0627\u0644\u064A\u0648\u0645") || t.includes("\u062F\u062E\u0644 \u0627\u0644\u0639\u064A\u0627\u062F\u0629") || t.includes("finance")) {
     const res = await executeAiToolCall("get_financial_summary", {}, {
       clinicId,
       member: userMember,
@@ -3762,7 +4343,7 @@ async function handleDeterministicIntent(params) {
     }
     return { reply, toolCalls, toolResults, status: res.status === "success" ? "done" : "failed" };
   }
-  if (t.includes("\u0625\u0639\u0627\u062F\u0629 \u0643\u0634\u0641") || t.includes("\u0645\u0648\u0627\u0639\u064A\u062F") || t.includes("\u0627\u0633\u062A\u0634\u0627\u0631\u0629") || t.includes("follow") || t.includes("appointment")) {
+  if ((t.includes("\u0625\u0639\u0627\u062F\u0629 \u0643\u0634\u0641") || t.includes("\u0645\u0648\u0627\u0639\u064A\u062F") || t.includes("\u0627\u0633\u062A\u0634\u0627\u0631\u0629") || t.includes("follow") || t.includes("appointment")) && !t.includes("\u0627\u062D\u062C\u0632") && !t.includes("\u0633\u062C\u0644")) {
     const res = await executeAiToolCall("get_follow_up_appointments", {}, {
       clinicId,
       member: userMember,
@@ -3796,8 +4377,131 @@ async function handleDeterministicIntent(params) {
     }
     return { reply, toolCalls, toolResults, status: res.status === "success" ? "done" : "failed" };
   }
-  if (t.includes("\u0627\u0628\u062D\u062B") || t.includes("\u0645\u0644\u0641") || t.includes("\u0645\u0631\u064A\u0636") || t.includes("search")) {
-    const cleanedSearch = userText.replace(/ابحث عن|ملف المريض|المريض|search/g, "").trim();
+  const isPaymentMutation = (t.includes("\u0633\u062C\u0644 \u062F\u0641\u0639") || t.includes("\u0633\u062C\u0644 \u0644\u0647 \u062F\u0641\u0639") || t.includes("\u0633\u062C\u0644 \u0633\u062F\u0627\u062F") || t.includes("\u062F\u0641\u0639") && /\d+/.test(t)) && !t.startsWith("\u0643\u064A\u0641");
+  if (isPaymentMutation) {
+    const numMatch = t.match(/\b(\d+)\b/);
+    const amount = numMatch ? Number(numMatch[1]) : 300;
+    let targetName = "";
+    const nameMatch = userText.match(/للمريض\s+([^\s]+)|لـ\s*([^\s]+)|دفع\s+([^\s]+)/);
+    if (nameMatch) {
+      targetName = (nameMatch[1] || nameMatch[2] || nameMatch[3] || "").trim();
+    }
+    if (!targetName && recentPatient?.name) {
+      targetName = recentPatient.name;
+    }
+    if (!targetName) {
+      targetName = "\u0627\u0644\u0645\u0631\u064A\u0636 \u0627\u0644\u062D\u0627\u0644\u064A";
+    }
+    const res = await executeAiToolCall("record_patient_payment", {
+      patientName: targetName,
+      patientPhone: recentPatient?.phone,
+      totalAmount: amount,
+      paidAmount: amount,
+      paymentMethod: t.includes("\u0641\u064A\u0632\u0627") || t.includes("card") ? "CARD" : "CASH",
+      serviceName: "\u0643\u0634\u0641 \u0637\u0628\u064A"
+    }, {
+      clinicId,
+      member: userMember,
+      isDoctorOwner,
+      isSubscriptionActive,
+      confirmedActionId,
+      clientIp,
+      idToken
+    });
+    toolCalls.push({
+      id: res.toolCallId,
+      toolName: "record_patient_payment",
+      arguments: { patientName: targetName, paidAmount: amount },
+      status: res.status,
+      result: res.result,
+      error: res.error
+    });
+    toolResults.push(res);
+    const reply = res.status === "success" ? `\u062A\u0645 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u0641\u0639 \u0628\u0646\u062C\u0627\u062D: ${res.result?.message || "\u062A\u0645 \u062A\u062D\u0635\u064A\u0644 \u0627\u0644\u0645\u0628\u0644\u063A"}` : `\u062A\u0639\u0630\u0631 \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062F\u0641\u0639: ${res.error}`;
+    return { reply, toolCalls, toolResults, status: res.status === "success" ? "done" : "failed" };
+  }
+  const isScheduleFollowUp = (t.includes("\u0627\u062D\u062C\u0632") || t.includes("\u0627\u0639\u0645\u0644") || t.includes("\u0633\u062C\u0644")) && (t.includes("\u0645\u062A\u0627\u0628\u0639\u0629") || t.includes("\u0627\u0633\u062A\u0634\u0627\u0631\u0629") || t.includes("\u0625\u0639\u0627\u062F\u0629 \u0643\u0634\u0641"));
+  if (isScheduleFollowUp) {
+    let targetName = "";
+    const nameMatch = userText.match(/للمريض\s+([^\s]+)|لـ\s*([^\s]+)|لمحمد|لأحمد/);
+    if (nameMatch) {
+      targetName = (nameMatch[1] || nameMatch[2] || "").trim();
+    }
+    if (!targetName && recentPatient?.name) {
+      targetName = recentPatient.name;
+    }
+    if (!targetName) {
+      targetName = "\u0627\u0644\u0645\u0631\u064A\u0636";
+    }
+    const nextWeek = /* @__PURE__ */ new Date();
+    nextWeek.setDate(nextWeek.getDate() + 7);
+    const yyyy = nextWeek.getFullYear();
+    const mm = String(nextWeek.getMonth() + 1).padStart(2, "0");
+    const dd = String(nextWeek.getDate()).padStart(2, "0");
+    const appointmentDate = `${yyyy}-${mm}-${dd}`;
+    const res = await executeAiToolCall("schedule_follow_up", {
+      patientName: targetName,
+      patientPhone: recentPatient?.phone,
+      appointmentDate,
+      appointmentTime: "18:00",
+      reason: "\u0645\u062A\u0627\u0628\u0639\u0629 \u0648\u0627\u0633\u062A\u0634\u0627\u0631\u0629 \u0637\u0628\u064A\u0629"
+    }, {
+      clinicId,
+      member: userMember,
+      isDoctorOwner,
+      isSubscriptionActive,
+      confirmedActionId,
+      clientIp,
+      idToken
+    });
+    toolCalls.push({
+      id: res.toolCallId,
+      toolName: "schedule_follow_up",
+      arguments: { patientName: targetName, appointmentDate },
+      status: res.status,
+      result: res.result,
+      error: res.error
+    });
+    toolResults.push(res);
+    const reply = res.status === "success" ? `\u062A\u0645 \u062C\u062F\u0648\u0644\u0629 \u0645\u0648\u0639\u062F \u0627\u0644\u0645\u062A\u0627\u0628\u0639\u0629 \u0628\u0646\u062C\u0627\u062D: ${res.result?.message || "\u062A\u0645 \u0627\u0644\u062D\u062C\u0632"}` : `\u062A\u0639\u0630\u0631 \u062D\u062C\u0632 \u0645\u0648\u0639\u062F \u0627\u0644\u0645\u062A\u0627\u0628\u0639\u0629: ${res.error}`;
+    return { reply, toolCalls, toolResults, status: res.status === "success" ? "done" : "failed" };
+  }
+  const isStatusUpdate = t.includes("\u062E\u0644\u0635 \u0643\u0634\u0641\u0647") || t.includes("\u0627\u0646\u062A\u0647\u0649 \u0643\u0634\u0641\u0647") || t.includes("\u062A\u0645 \u0627\u0644\u0643\u0634\u0641") || t.includes("\u062E\u0644\u064A \u0627\u0644\u0632\u064A\u0627\u0631\u0629 \u062E\u0644\u0635\u062A");
+  if (isStatusUpdate) {
+    let targetIdentifier = "";
+    const nameMatch = userText.match(/([^\s]+)\s+خلص/);
+    if (nameMatch && nameMatch[1] && !["\u0647\u0648", "\u0644\u0647", "\u062F\u0647"].includes(nameMatch[1])) {
+      targetIdentifier = nameMatch[1];
+    } else if (recentPatient?.name) {
+      targetIdentifier = recentPatient.name;
+    }
+    const res = await executeAiToolCall("update_patient_status", {
+      patientRecordId: targetIdentifier || "current",
+      newStatus: "done"
+    }, {
+      clinicId,
+      member: userMember,
+      isDoctorOwner,
+      isSubscriptionActive,
+      confirmedActionId,
+      clientIp,
+      idToken
+    });
+    toolCalls.push({
+      id: res.toolCallId,
+      toolName: "update_patient_status",
+      arguments: { patientRecordId: targetIdentifier, newStatus: "done" },
+      status: res.status,
+      result: res.result,
+      error: res.error
+    });
+    toolResults.push(res);
+    const reply = res.status === "success" ? `\u062A\u0645 \u062A\u062D\u062F\u064A\u062B \u062D\u0627\u0644\u0629 \u0627\u0644\u0643\u0634\u0641 \u0628\u0646\u062C\u0627\u062D: ${res.result?.message || "\u0627\u0646\u062A\u0647\u0649 \u0627\u0644\u0643\u0634\u0641"}` : `\u062A\u0639\u0630\u0631 \u062A\u062D\u062F\u064A\u062B \u062D\u0627\u0644\u0629 \u0627\u0644\u0643\u0634\u0641: ${res.error}`;
+    return { reply, toolCalls, toolResults, status: res.status === "success" ? "done" : "failed" };
+  }
+  const isExplicitPatientSearch = t.startsWith("\u0627\u0628\u062D\u062B \u0639\u0646") || t.startsWith("\u0627\u0628\u062D\u062B") || t.includes("\u0645\u0644\u0641 \u0627\u0644\u0645\u0631\u064A\u0636") || t.includes("\u0628\u064A\u0627\u0646\u0627\u062A \u0627\u0644\u0645\u0631\u064A\u0636") || t.includes("\u0633\u062C\u0644 \u0627\u0644\u0645\u0631\u064A\u0636") || t.startsWith("search");
+  if (isExplicitPatientSearch) {
+    const cleanedSearch = userText.replace(/ابحث عن|ابحث|ملف المريض|بيانات المريض|سجل المريض|search/g, "").trim();
     if (cleanedSearch.length >= 2) {
       const res = await executeAiToolCall("search_patients", { searchTerm: cleanedSearch }, {
         clinicId,
@@ -3805,7 +4509,8 @@ async function handleDeterministicIntent(params) {
         isDoctorOwner,
         isSubscriptionActive,
         confirmedActionId,
-        clientIp
+        clientIp,
+        idToken
       });
       toolCalls.push({
         id: res.toolCallId,
@@ -3864,8 +4569,9 @@ async function handleDeterministicIntent(params) {
     return { reply, toolCalls, toolResults, status: res.status === "success" ? "done" : "failed" };
   }
   if (geminiErrorMessage) {
+    const cleanErrStr = typeof geminiErrorMessage === "string" && geminiErrorMessage !== "[object Object]" && geminiErrorMessage.trim() ? geminiErrorMessage.trim() : "\u062A\u0639\u0630\u0631 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0645\u0632\u0648\u062F \u0627\u0644\u062E\u062F\u0645\u0629 \u062D\u0627\u0644\u064A\u0627\u064B";
     return {
-      reply: `\u0639\u0641\u0648\u0627\u064B\u060C \u062A\u0639\u0630\u0631 \u0639\u0644\u0649 \u0627\u0644\u0648\u0643\u064A\u0644 \u0627\u0644\u0630\u0643\u064A \u0625\u062A\u0645\u0627\u0645 \u0637\u0644\u0628\u0643 \u0639\u0628\u0631 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A (${geminiErrorMessage}). \u064A\u0631\u062C\u0649 \u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629 \u0644\u0627\u062D\u0642\u0627\u064B \u0623\u0648 \u0627\u0633\u062A\u062E\u062F\u0627\u0645 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629 \u0644\u0644\u0637\u0627\u0628\u0648\u0631 \u0648\u0627\u0644\u0645\u0627\u0644\u064A\u0629 \u0648\u0627\u0644\u0645\u0631\u0636\u0649.`,
+      reply: `\u0639\u0641\u0648\u0627\u064B\u060C \u062A\u0639\u0630\u0631 \u0639\u0644\u0649 \u0627\u0644\u0648\u0643\u064A\u0644 \u0627\u0644\u0630\u0643\u064A \u0625\u062A\u0645\u0627\u0645 \u0637\u0644\u0628\u0643 \u0639\u0628\u0631 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A (${cleanErrStr}). \u064A\u0631\u062C\u0649 \u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629 \u0644\u0627\u062D\u0642\u0627\u064B \u0623\u0648 \u0627\u0633\u062A\u062E\u062F\u0627\u0645 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629 \u0644\u0644\u0637\u0627\u0628\u0648\u0631 \u0648\u0627\u0644\u0645\u0627\u0644\u064A\u0629 \u0648\u0627\u0644\u0645\u0631\u0636\u0649.`,
       status: "failed"
     };
   }
@@ -3882,6 +4588,8 @@ async function handleDeterministicIntent(params) {
 \u2022 "\u0646\u0627\u062F\u0650 \u0639\u0644\u0649 \u0627\u0644\u0645\u0631\u064A\u0636 \u0627\u0644\u062A\u0627\u0644\u064A \u0641\u064A \u0627\u0644\u0637\u0627\u0628\u0648\u0631"
 \u2022 "\u0645\u064A\u0646 \u0641\u064A \u0637\u0627\u0628\u0648\u0631 \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631 \u062F\u0644\u0648\u0642\u062A\u064A\u061F"
 \u2022 "\u0643\u0634\u0641 \u062D\u0633\u0627\u0628 \u0648\u0625\u064A\u0631\u0627\u062F\u0627\u062A \u0627\u0644\u064A\u0648\u0645"
+\u2022 "\u0633\u062C\u0644 \u062F\u0641\u0639 300 \u062C \u0644\u0644\u0645\u0631\u064A\u0636"
+\u2022 "\u0627\u062D\u062C\u0632 \u0644\u0644\u0645\u0631\u064A\u0636 \u0645\u0648\u0639\u062F \u0645\u062A\u0627\u0628\u0639\u0629 \u0627\u0644\u0623\u0633\u0628\u0648\u0639 \u0627\u0644\u0642\u0627\u062F\u0645"
 \u2022 "\u0627\u0628\u062D\u062B \u0639\u0646 \u0645\u0644\u0641 \u0627\u0644\u0645\u0631\u064A\u0636 [\u0627\u0644\u0627\u0633\u0645 \u0623\u0648 \u0631\u0642\u0645 \u0627\u0644\u0647\u0627\u062A\u0641]"
 \u2022 "\u0627\u0633\u062A\u0639\u0631\u0636 \u0645\u0648\u0627\u0639\u064A\u062F \u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u0643\u0634\u0641 \u0627\u0644\u0642\u0627\u062F\u0645\u0629"
 \u2022 "\u0646\u0628\u0647\u0646\u064A \u0644\u0648 \u0648\u0642\u062A \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631 \u0632\u0627\u062F \u0639\u0646 30 \u062F\u0642\u064A\u0642\u0629" (\u0625\u0646\u0634\u0627\u0621 \u0642\u0648\u0627\u0639\u062F \u0648\u0645\u0647\u0627\u0645 \u0622\u0644\u064A\u0629)`;
@@ -3891,7 +4599,7 @@ async function handleDeterministicIntent(params) {
     };
   }
   return {
-    reply: '\u0644\u0645 \u0623\u062A\u0645\u0643\u0646 \u0645\u0646 \u0627\u0644\u062A\u0639\u0631\u0641 \u0639\u0644\u0649 \u0647\u0630\u0627 \u0627\u0644\u0623\u0645\u0631. \u064A\u0645\u0643\u0646\u0643 \u0627\u0633\u062A\u062E\u062F\u0627\u0645 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629 (\u0645\u062B\u0644: "\u0645\u064A\u0646 \u0641\u064A \u0627\u0644\u0637\u0627\u0628\u0648\u0631"\u060C "\u0646\u0627\u062F\u0650 \u0639\u0644\u0649 \u0627\u0644\u0645\u0631\u064A\u0636 \u0627\u0644\u062A\u0627\u0644\u064A"\u060C "\u0645\u0644\u062E\u0635 \u0627\u0644\u0625\u064A\u0631\u0627\u062F\u0627\u062A")\u060C \u0623\u0648 \u0627\u0644\u062A\u0623\u0643\u062F \u0645\u0646 \u062A\u0648\u0641\u0631 \u0645\u0641\u062A\u0627\u062D \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u0644\u0644\u0645\u062D\u0627\u062F\u062B\u0629 \u0627\u0644\u062D\u0631\u0629.',
+    reply: '\u0644\u0645 \u0623\u062A\u0645\u0643\u0646 \u0645\u0646 \u0627\u0644\u062A\u0639\u0631\u0641 \u0639\u0644\u0649 \u0647\u0630\u0627 \u0627\u0644\u0623\u0645\u0631. \u064A\u0645\u0643\u0646\u0643 \u0627\u0633\u062A\u062E\u062F\u0627\u0645 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629 (\u0645\u062B\u0644: "\u0645\u064A\u0646 \u0641\u064A \u0627\u0644\u0637\u0627\u0628\u0648\u0631"\u060C "\u0646\u0627\u062F\u0650 \u0639\u0644\u0649 \u0627\u0644\u0645\u0631\u064A\u0636 \u0627\u0644\u062A\u0627\u0644\u064A"\u060C "\u0633\u062C\u0644 \u062F\u0641\u0639 300"\u060C "\u0645\u0644\u062E\u0635 \u0627\u0644\u0625\u064A\u0631\u0627\u062F\u0627\u062A")\u060C \u0623\u0648 \u0627\u0644\u062A\u0623\u0643\u062F \u0645\u0646 \u062A\u0648\u0641\u0631 \u0645\u0641\u062A\u0627\u062D \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u0644\u0644\u0645\u062D\u0627\u062F\u062B\u0629 \u0627\u0644\u062D\u0631\u0629.',
     status: "failed"
   };
 }
@@ -4190,12 +4898,15 @@ async function verifyClinicAccess(user, clinicId) {
   }
 }
 export {
+  classifyProviderError,
   db,
   deleteDoctorDocAuthoritative,
   executeAiToolCall,
   getDocRestWithToken,
   handleAiChatServer,
+  sanitizeFirestorePayload,
   updateDoctorDocAuthoritative,
+  validateAndNormalizeTask,
   verifyClinicAccess,
   verifyFirebaseIdToken
 };

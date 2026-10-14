@@ -122,7 +122,8 @@ export function isValidEmail(email: string): boolean {
 export function isValidUrl(url: string): boolean {
   if (!url) return true; // Optional fields can be empty
   const trimmed = url.trim().toLowerCase();
-  if (trimmed.startsWith('javascript:') || trimmed.startsWith('data:')) return false;
+  if (trimmed.startsWith('javascript:')) return false;
+  if (trimmed.startsWith('data:image/')) return true; // Supported Base64 compressed image data URLs
   return trimmed.startsWith('https://') || trimmed.startsWith('http://');
 }
 

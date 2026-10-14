@@ -9,7 +9,8 @@ import {
   where,
   limit,
   orderBy,
-  addDoc
+  addDoc,
+  deleteDoc
 } from 'firebase/firestore';
 import { db } from '../../firebase/config.ts';
 import {
@@ -26,6 +27,7 @@ import {
   AiAutonomousTask,
   AiAuditLog
 } from '../../types/aiAgent.ts';
+import { validateAndNormalizeTask, sanitizeFirestorePayload } from './taskValidation.ts';
 import {
   searchClinicPatientsFast,
   getPatientProfile,
@@ -920,49 +922,48 @@ export async function executeAiToolCall(
       case 'create_autonomous_task': {
         const title = String(args.title || '').trim();
         const description = String(args.description || '').trim();
-        const triggerType = (String(args.triggerType || 'EVENT').toUpperCase()) as any;
-        const event = args.event as any;
-        const condition = args.condition as any;
-        const threshold = args.threshold ? Number(args.threshold) : undefined;
-        const actionType = (String(args.actionType || 'ALERT_STAFF').toUpperCase()) as any;
+        const triggerType = args.triggerType;
+        const event = args.event;
+        const condition = args.condition;
+        const threshold = args.threshold !== undefined && args.threshold !== null && args.threshold !== '' ? Number(args.threshold) : undefined;
+        const actionType = args.actionType;
         const messageTemplate = String(args.messageTemplate || '').trim();
 
-        if (!title || !description) {
-          throw new Error('عنوان ووصف المهمة الآلية مطلوبان');
+        const validation = validateAndNormalizeTask(
+          {
+            title,
+            description,
+            triggerType,
+            triggerConfig: {
+              event,
+              condition,
+              threshold
+            },
+            actionType,
+            actionConfig: {
+              messageTemplate,
+              severity: 'info',
+              autoExecution: true
+            },
+            status: 'active'
+          },
+          clinicId,
+          { uid: actorUid, name: actorName }
+        );
+
+        if (!validation.valid || !validation.task) {
+          throw new Error(validation.error || 'عنوان ووصف المهمة الآلية مطلوبان وبياناتها غير صالحة');
         }
 
-        const taskData: Omit<AiAutonomousTask, 'id'> = {
-          clinicId,
-          title,
-          description,
-          triggerType,
-          triggerConfig: {
-            event,
-            condition,
-            threshold
-          },
-          actionType,
-          actionConfig: {
-            messageTemplate,
-            severity: 'info',
-            autoExecution: true
-          },
-          status: 'active',
-          createdAt: new Date().toISOString(),
-          createdBy: actorUid,
-          createdByName: actorName,
-          executionCount: 0
-        };
-
         const taskCol = collection(db, 'doctors', clinicId, 'aiTasks');
-        const docRef = await addDoc(taskCol, taskData);
+        const docRef = await addDoc(taskCol, validation.task);
 
         result = {
           success: true,
           taskId: docRef.id,
-          title,
+          title: validation.task.title,
           status: 'active',
-          message: `تم حفظ وتفعيل القاعدة الآلية الذكية: "${title}" بنجاح في نظام العيادة.`
+          message: `تم حفظ وتفعيل القاعدة الآلية الذكية: "${validation.task.title}" بنجاح في نظام العيادة.`
         };
         break;
       }
@@ -986,6 +987,57 @@ export async function executeAiToolCall(
           taskId,
           status,
           message: `تم ${status === 'active' ? 'تفعيل' : 'إيقاف'} المهمة الآلية بنجاح.`
+        };
+        break;
+      }
+
+      // ----------------------------------------------------
+      // WRITE: edit_autonomous_task
+      // ----------------------------------------------------
+      case 'edit_autonomous_task': {
+        const taskId = String(args.taskId || '').trim();
+        if (!taskId) throw new Error('معرف المهمة الآلية مطلوب');
+
+        const taskRef = doc(db, 'doctors', clinicId, 'aiTasks', taskId);
+        const taskSnap = await getDoc(taskRef);
+        if (!taskSnap.exists()) {
+          throw new Error('المهمة الآلية غير موجودة أو تم حذفها مسبقاً');
+        }
+
+        const updates: Record<string, any> = {
+          updatedAt: new Date().toISOString()
+        };
+        if (args.title && String(args.title).trim()) updates.title = String(args.title).trim();
+        if (args.description && String(args.description).trim()) updates.description = String(args.description).trim();
+        if (args.threshold !== undefined && !isNaN(Number(args.threshold))) {
+          updates['triggerConfig.threshold'] = Number(args.threshold);
+        }
+        if (args.messageTemplate && String(args.messageTemplate).trim()) {
+          updates['actionConfig.messageTemplate'] = String(args.messageTemplate).trim();
+        }
+
+        await updateDoc(taskRef, updates);
+        result = {
+          success: true,
+          taskId,
+          message: 'تم تحديث إعدادات المهمة الآلية بنجاح.'
+        };
+        break;
+      }
+
+      // ----------------------------------------------------
+      // WRITE: delete_autonomous_task
+      // ----------------------------------------------------
+      case 'delete_autonomous_task': {
+        const taskId = String(args.taskId || '').trim();
+        if (!taskId) throw new Error('معرف المهمة الآلية مطلوب');
+
+        const taskRef = doc(db, 'doctors', clinicId, 'aiTasks', taskId);
+        await deleteDoc(taskRef);
+        result = {
+          success: true,
+          taskId,
+          message: 'تم حذف المهمة الآلية نهائياً من نظام العيادة.'
         };
         break;
       }
@@ -1283,18 +1335,11 @@ export async function executeAiToolCall(
 async function logAiAction(entry: Omit<AiAuditLog, 'id' | 'timestamp'>): Promise<void> {
   try {
     const nowIso = new Date().toISOString();
-    const sanitizedEntry: Record<string, any> = {};
-    Object.entries(entry).forEach(([k, v]) => {
-      if (v !== undefined) {
-        sanitizedEntry[k] = v;
-      }
-    });
-
-    const logDoc = {
+    const logDoc = sanitizeFirestorePayload({
       id: `ai_log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       timestamp: nowIso,
-      ...sanitizedEntry
-    };
+      ...entry
+    });
 
     const logsCol = collection(db, 'doctors', entry.clinicId, 'aiAuditLogs');
     await addDoc(logsCol, logDoc);

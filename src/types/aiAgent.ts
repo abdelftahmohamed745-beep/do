@@ -1,4 +1,5 @@
 import { ClinicPermission, ClinicRole, PatientRecord, ClinicTransaction, FollowUpAppointment, DailySession } from '../types.ts';
+export type { ClinicRole };
 
 export type AiToolName =
   // READ tools
@@ -18,6 +19,8 @@ export type AiToolName =
   | 'create_medical_order'
   | 'create_autonomous_task'
   | 'toggle_autonomous_task'
+  | 'edit_autonomous_task'
+  | 'delete_autonomous_task'
   | 'update_patient_profile'
   | 'add_patient_consultation_note'
   | 'cancel_queue_ticket'
@@ -94,7 +97,8 @@ export type AiSystemEventType =
   | 'PATIENT_DONE'
   | 'PAYMENT_RECORDED'
   | 'SESSION_COMPLETED'
-  | 'FOLLOWUP_SCHEDULED';
+  | 'FOLLOWUP_SCHEDULED'
+  | 'NO_SHOW_DETECTED';
 
 export type AiConditionType =
   | 'QUEUE_WAIT_TIME_EXCEEDED'
@@ -115,12 +119,15 @@ export interface AiAutonomousTask {
   clinicId: string;
   title: string;
   description: string;
+  definitionId?: string; // Optional reference to custom or built-in AutomationDefinition
+  schemaVersion?: number;
   triggerType: AiTriggerType;
   triggerConfig: {
     event?: AiSystemEventType;
     condition?: AiConditionType;
     threshold?: number; // e.g. 30 minutes, or 500 EGP
     scheduleTime?: string; // e.g. "21:00"
+    [key: string]: any;
   };
   actionType: AiAutonomousActionType;
   actionConfig: {
@@ -139,6 +146,51 @@ export interface AiAutonomousTask {
   lastExecutionStatus?: 'success' | 'failed';
   lastExecutionLog?: string;
 }
+
+export interface AutomationConfigFieldSchema {
+  key: string;
+  labelAr: string;
+  type: 'string' | 'number' | 'boolean' | 'select' | 'time';
+  required?: boolean;
+  defaultValue?: any;
+  options?: { value: string; labelAr: string }[];
+  descriptionAr?: string;
+  min?: number;
+  max?: number;
+}
+
+export interface AutomationDefinition {
+  id: string; // e.g. "builtin_trigger_queue_wait" or "def_..."
+  clinicId: string; // "SYSTEM" for built-in, or specific clinicId
+  name: string; // e.g. "تنبيه وقت الانتظار"
+  description: string;
+  kind: 'TRIGGER' | 'ACTION';
+  handlerId: string; // Stable trusted handler ID
+  category?: string;
+  isBuiltIn: boolean;
+  status: 'active' | 'disabled';
+  supportedTriggerKind?: AiTriggerType;
+  supportedActionKind?: AiAutonomousActionType;
+  requiredPermission?: ClinicPermission;
+  schemaVersion: number;
+  configFields: AutomationConfigFieldSchema[];
+  defaultConfig?: Record<string, any>;
+  createdAt: string;
+  updatedAt: string;
+  createdBy?: string;
+  createdByName?: string;
+}
+
+export type AiRequestLifecycleState =
+  | 'idle'
+  | 'submitting'
+  | 'waiting_ai'
+  | 'executing_tools'
+  | 'awaiting_confirmation'
+  | 'completed'
+  | 'cancelled'
+  | 'superseded'
+  | 'error';
 
 export interface AiAuditLog {
   id: string;
