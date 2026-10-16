@@ -138,36 +138,23 @@ export const AuthPage: React.FC<AuthPageProps> = ({
         throw new Error("لم يتم العثور على الجلسة الحالية. يرجى تسجيل الدخول مجدداً.");
       }
 
-      const vRef = doc(db, "email_verifications", user.uid);
-      const vSnap = await getDoc(vRef);
+      const idToken = await user.getIdToken();
+      const resp = await fetch('/api/verify-otp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${idToken}`
+        },
+        body: JSON.stringify({ code: otpCode.trim() })
+      });
 
-      if (!vSnap.exists()) {
-        throw new Error("لم يتم العثور على رمز تحقق فعال. يرجى الضغط على إعادة إرسال الكود.");
+      const data = await resp.json().catch(() => ({}));
+
+      if (!resp.ok || !data.success) {
+        throw new Error(data.error || "رمز التحقق غير صحيح أو انتهت صلاحيته.");
       }
 
-      const vData = vSnap.data();
-
-      // 1. Expiry check
-      if (new Date(vData.expiresAt).getTime() < Date.now()) {
-        throw new Error("انتهت صلاحية كود التحقق (10 دقائق). يرجى الضغط على زر إعادة إرسال الكود.");
-      }
-
-      // 2. Max attempts check
-      if (vData.attempts >= 5) {
-        throw new Error("تجاوزت الحد الأقصى للمحاولات الخاطئة (5 محاولات). يرجى الضغط على إعادة إرسال الكود للحصول على كود جديد.");
-      }
-
-      // 3. Code verification
-      if (vData.code !== otpCode.trim()) {
-        await updateDoc(vRef, { attempts: increment(1) });
-        const currentAttempts = (vData.attempts || 0) + 1;
-        throw new Error(`كود التحقق غير صحيح. (المحاولة ${currentAttempts} من 5).`);
-      }
-
-      // Success!
-      await updateDoc(vRef, { verified: true });
-
-      const payload = vData.pendingPayload || {};
+      const payload = data.pendingPayload || {};
 
       let docProf = await getDoctorProfile(user.uid);
       if (!docProf) {
@@ -327,7 +314,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
       
       {/* Nodemailer Gmail OTP Verification Pending Screen */}
       {isVerifyingEmail ? (
-        <div className="bg-[#fdfcf9] rounded-3xl p-6 sm:p-8 shadow-xl border border-sky-100 mb-8">
+        <div className="bg-[#fdfcf9] rounded-3xl p-4 sm:p-8 shadow-xl border border-sky-100 mb-8">
           <div className="text-center mb-6">
             <div className="w-16 h-16 bg-sky-50 rounded-2xl flex items-center justify-center mx-auto mb-3 border border-sky-100">
               <KeyRound className="w-8 h-8 text-sky-600" />
@@ -353,7 +340,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                 onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
                 placeholder="••••••"
                 required
-                className="w-full text-center text-2xl tracking-[12px] font-mono py-3 px-4 bg-slate-50 border border-slate-300 rounded-2xl focus:outline-hidden focus:ring-2 focus:ring-sky-500 dir-ltr font-black text-sky-900"
+                className="w-full text-center text-xl sm:text-2xl tracking-[6px] sm:tracking-[12px] font-mono py-3 px-3 sm:px-4 bg-slate-50 border border-slate-300 rounded-2xl focus:outline-hidden focus:ring-2 focus:ring-sky-500 dir-ltr font-black text-sky-900"
               />
               <p className="text-[11px] text-slate-400 text-center mt-1">الكود صالـح لمدة 10 دقائق (الحد الأقصى 5 محاولات)</p>
             </div>
@@ -401,7 +388,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
         </div>
       ) : (
         /* Main Login / Signup Card */
-        <div className="bg-[#fdfcf9] rounded-3xl p-6 sm:p-8 shadow-xl border border-[#e7e3da] mb-8">
+        <div className="bg-[#fdfcf9] rounded-3xl p-4 sm:p-8 shadow-xl border border-[#e7e3da] mb-8">
           
           <div className="text-center mb-6">
             <div className="w-14 h-14 bg-[#122c4a] rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-md">

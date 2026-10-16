@@ -222,16 +222,22 @@ service cloud.firestore {
     // Clinic Members collection
     match /clinic_members/{memberId} {
       allow read: if isAuthenticated();
+      // Creation restricted strictly to Clinic Owner or Platform Admin; or invited user accepting a valid pending invitation
       allow create: if isOrgOwner(request.resource.data.organizationId) 
         || isAdmin()
         || (
           isOwner(memberId) &&
           request.resource.data.role != 'OWNER' &&
-          request.resource.data.status == 'active'
+          request.resource.data.status == 'active' &&
+          request.resource.data.invitationId is string &&
+          exists(/databases/$(database)/documents/clinic_invitations/$(request.resource.data.invitationId)) &&
+          get(/databases/$(database)/documents/clinic_invitations/$(request.resource.data.invitationId)).data.status == 'accepted' &&
+          get(/databases/$(database)/documents/clinic_invitations/$(request.resource.data.invitationId)).data.acceptedByUid == request.auth.uid &&
+          get(/databases/$(database)/documents/clinic_invitations/$(request.resource.data.invitationId)).data.organizationId == request.resource.data.organizationId
         );
       allow update: if isOrgOwner(resource.data.organizationId) || isAdmin() || (
         isOwner(memberId) && 
-        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'customPermissions', 'organizationId', 'status', 'invitedBy'])
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'customPermissions', 'organizationId', 'status', 'invitedBy', 'invitationId'])
       );
       allow delete: if isOrgOwner(resource.data.organizationId) || isAdmin();
     }
@@ -269,16 +275,13 @@ service cloud.firestore {
 
       match /members/{memberId} {
         allow read: if isOrgMember(orgId);
-        allow create: if isOrgOwner(orgId) || isAdmin() || (
-          isOwner(memberId) &&
-          request.resource.data.role != 'OWNER' &&
-          request.resource.data.status == 'active'
-        );
+        // Only organization owner or admin can directly create/delete organization members
+        allow create: if isOrgOwner(orgId) || isAdmin();
         allow update: if isOrgOwner(orgId) || (
           isOwner(memberId) &&
           !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'customPermissions', 'organizationId', 'status', 'invitedBy'])
         );
-        allow delete: if isOrgOwner(orgId);
+        allow delete: if isOrgOwner(orgId) || isAdmin();
       }
 
       match /audit_logs/{logId} {
@@ -312,7 +315,9 @@ service cloud.firestore {
     match /clinic_transactions/{txId} {
       allow read: if (isAuthenticated() && resource.data.organizationId == request.auth.uid) || isOrgMember(resource.data.organizationId) || isAdmin();
       allow create: if (isAuthenticated() && request.resource.data.organizationId == request.auth.uid) || isOrgMember(request.resource.data.organizationId) || isAdmin();
-      allow update, delete: if (isAuthenticated() && resource.data.organizationId == request.auth.uid) || isOrgMember(resource.data.organizationId) || isAdmin();
+      allow update: if (isAuthenticated() && resource.data.organizationId == request.auth.uid) || isOrgOwner(resource.data.organizationId) || isAdmin();
+      // Deletions strictly restricted to Clinic Owner or Platform Admin to prevent accounting tampering
+      allow delete: if isOrgOwner(resource.data.organizationId) || isAdmin();
     }
 
     // User FCM Tokens collection
@@ -328,19 +333,37 @@ service cloud.firestore {
     // User In-App Notifications
     match /users/{userId}/notifications/{notificationId} {
       allow read, update: if isOwner(userId) || isAdmin();
-      allow create: if isAuthenticated() || isAdmin();
+      // Only authorized clinic members, system, or admin can notify a user
+      allow create: if isAuthenticated() && (
+        isOwner(userId) || 
+        isAdmin() ||
+        (request.resource.data.clinicId is string && isOrgMember(request.resource.data.clinicId))
+      );
       allow delete: if isOwner(userId) || isAdmin();
     }
 
-    // Email Verifications collection
+    // Email Verifications collection - Protected from client tampering
     match /email_verifications/{docId} {
-      allow read, create, update: if isAuthenticated() && (request.auth.uid == resource.data.uid || request.auth.uid == request.resource.data.uid) || isAdmin();
+      // User can read their own verification doc
+      allow read: if isAuthenticated() && (request.auth.uid == docId || request.auth.uid == resource.data.uid) || isAdmin();
+      // Initial creation: Must start with unverified status and 0 attempts
+      allow create: if isAuthenticated() && (request.auth.uid == docId || request.auth.uid == request.resource.data.uid)
+        && request.resource.data.verified == false
+        && request.resource.data.attempts == 0;
+      // Client updates: CANNOT self-certify verified=true or reset code/attempts
+      allow update: if isAdmin() || (
+        isAuthenticated() && 
+        (request.auth.uid == docId || request.auth.uid == resource.data.uid) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['verified', 'code', 'expiresAt', 'createdAt', 'uid', 'email'])
+      );
+      allow delete: if isAdmin();
     }
 
     // Audit Logs collection
     match /auditLogs/{logId} {
       allow read: if isAdmin();
-      allow create: if true;
+      // Only authenticated users or admins can record audit logs; unauthenticated spam rejected
+      allow create: if isAuthenticated() || isAdmin();
       allow update, delete: if false;
     }
 
@@ -477,7 +500,8 @@ service cloud.firestore {
 
       match /staff/{staffId} {
         allow read: if isLabMember(labId);
-        allow write: if isOwner(labId) || isAdmin() || isLabOwnerOrManager(labId) || (isAuthenticated() && request.auth.uid == staffId);
+        // Only lab owner, manager or platform admin can add or modify lab staff
+        allow write: if isOwner(labId) || isAdmin() || isLabOwnerOrManager(labId);
       }
 
       match /finances/{txId} {
@@ -508,10 +532,17 @@ service cloud.firestore {
 
     // Unified Patients Identity & Profiles collection
     match /patients/{patientId} {
-      // Prevent public listing of all patient profiles across the database
-      allow list: if isAuthenticated() || isAdmin();
+      // Prevent unauthorized collection scraping of all patient profiles across the system
+      allow list: if isAdmin();
       // Allow single lookup for authenticated staff/admin or patient lookup of their own profile
-      allow get: if isAuthenticated() || isAdmin() || (request.auth != null && (resource.data.userId == request.auth.uid || request.auth.uid == patientId));
+      allow get: if isAdmin() || (
+        request.auth != null && (
+          resource.data.userId == request.auth.uid ||
+          request.auth.uid == patientId ||
+          (resource.data.doctorId is string && isOrgMember(resource.data.doctorId)) ||
+          (resource.data.clinicId is string && isOrgMember(resource.data.clinicId))
+        )
+      );
       // Validated profile creation (e.g. during booking or registration)
       allow create: if (
         request.resource.data.name is string && 
@@ -519,18 +550,40 @@ service cloud.firestore {
         request.resource.data.phone is string &&
         request.resource.data.phone.size() >= 8
       );
-      // Updates restricted to authenticated staff/doctor/admin or patient updating their own record
-      allow update: if isAuthenticated() || isAdmin() || (
-        resource.data.phone == request.resource.data.phone &&
-        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['accountType', 'id', 'patientId'])
+      // Updates restricted to clinic doctor/staff, admin, or patient updating their own record
+      allow update: if isAdmin() || (
+        isAuthenticated() && (
+          (resource.data.doctorId is string && isOrgMember(resource.data.doctorId)) ||
+          (resource.data.clinicId is string && isOrgMember(resource.data.clinicId)) ||
+          (resource.data.userId == request.auth.uid || request.auth.uid == patientId) ||
+          (
+            resource.data.phone == request.resource.data.phone &&
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['accountType', 'id', 'patientId'])
+          )
+        )
       );
       allow delete: if isAdmin();
 
       // Patient Prescriptions subcollection (Paper & Digital Rx)
       match /prescriptions/{prescriptionId} {
-        allow read: if isAuthenticated() || isAdmin();
-        allow create: if isAuthenticated() || isAdmin();
-        allow update, delete: if isAuthenticated() || isAdmin();
+        // Read allowed for patient themselves, attending doctor/clinic staff, or admin
+        allow read: if isAdmin() || (
+          isAuthenticated() && (
+            resource.data.patientUserId == request.auth.uid ||
+            (resource.data.doctorId is string && (isOrgMember(resource.data.doctorId) || isOwner(resource.data.doctorId)))
+          )
+        );
+        // Only authorized doctor/clinic staff or admin can create or modify medical prescriptions
+        allow create: if isAdmin() || (
+          isAuthenticated() && 
+          request.resource.data.doctorId is string && 
+          (isOrgMember(request.resource.data.doctorId) || isOwner(request.resource.data.doctorId))
+        );
+        allow update, delete: if isAdmin() || (
+          isAuthenticated() && 
+          resource.data.doctorId is string && 
+          (isOrgMember(resource.data.doctorId) || isOwner(resource.data.doctorId))
+        );
       }
     }
 

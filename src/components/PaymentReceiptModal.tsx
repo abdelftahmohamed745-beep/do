@@ -64,8 +64,8 @@ export const PaymentReceiptModal: React.FC<PaymentReceiptModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 border border-slate-200 shadow-2xl relative font-['Tajawal',sans-serif]">
+    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+      <div className="bg-white rounded-3xl max-w-lg w-full p-4 sm:p-8 border border-slate-200 shadow-2xl relative font-['Tajawal',sans-serif]">
         
         {/* Print controls - hidden when printing */}
         <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-6 print:hidden">

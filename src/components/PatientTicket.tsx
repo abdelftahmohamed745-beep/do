@@ -252,7 +252,7 @@ export const PatientTicket: React.FC<PatientTicketProps> = ({
         </div>
 
         {/* Ticket Body */}
-        <div className="p-6 sm:p-8 text-center space-y-5">
+        <div className="p-4 sm:p-8 text-center space-y-5">
           
           {/* Patient Details & Quick Booking Reference */}
           <div className="space-y-2">
@@ -268,9 +268,9 @@ export const PatientTicket: React.FC<PatientTicketProps> = ({
 
             {/* Quick Booking Reference Code Pill */}
             {patient.bookingReference && (
-              <div className="inline-flex items-center gap-2 bg-sky-50 border border-sky-200 px-3 py-1.5 rounded-2xl">
-                <KeyRound className="w-3.5 h-3.5 text-sky-700" />
-                <span className="text-[11px] font-bold text-sky-900">رمز الحجز:</span>
+              <div className="inline-flex items-center gap-2 bg-sky-50 border border-sky-200 px-3 py-1.5 rounded-2xl max-w-full">
+                <KeyRound className="w-3.5 h-3.5 text-sky-700 shrink-0" />
+                <span className="text-[11px] font-bold text-sky-900 shrink-0">رمز الحجز:</span>
                 <span className="font-mono font-black text-xs text-sky-950 tracking-wider">
                   {patient.bookingReference}
                 </span>
@@ -293,7 +293,7 @@ export const PatientTicket: React.FC<PatientTicketProps> = ({
           </div>
 
           {/* Sequence Number Highlight */}
-          <div className="bg-[#edf3fa] rounded-3xl p-6 border border-[#d1dfed] shadow-inner">
+          <div className="bg-[#edf3fa] rounded-3xl p-4 sm:p-6 border border-[#d1dfed] shadow-inner">
             <div className="text-xs font-bold text-[#122c4a] uppercase tracking-wider mb-1">
               رقم دورك الثابت
             </div>
@@ -377,18 +377,18 @@ export const PatientTicket: React.FC<PatientTicketProps> = ({
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={handleShareTicket}
-                className="py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl transition flex items-center justify-center gap-1.5"
+                className="py-2.5 px-2 sm:px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer"
               >
-                <Share2 className="w-4 h-4" />
-                <span>مشاركة التذكرة</span>
+                <Share2 className="w-4 h-4 shrink-0" />
+                <span className="truncate">مشاركة التذكرة</span>
               </button>
 
               <button
                 onClick={onNewBooking}
-                className="py-2.5 px-4 bg-sky-50 hover:bg-sky-100 text-sky-700 font-bold text-xs rounded-xl transition flex items-center justify-center gap-1.5"
+                className="py-2.5 px-2 sm:px-4 bg-sky-50 hover:bg-sky-100 text-sky-700 font-bold text-xs rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer"
               >
-                <RotateCcw className="w-4 h-4" />
-                <span>حجز دور آخر</span>
+                <RotateCcw className="w-4 h-4 shrink-0" />
+                <span className="truncate">حجز دور آخر</span>
               </button>
             </div>
 

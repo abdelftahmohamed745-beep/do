@@ -957,7 +957,7 @@ export const ClinicFinanceManager: React.FC<ClinicFinanceManagerProps> = ({
 
       {/* 3. TAB 1: REGISTER PAYMENT FORM */}
       {activeTab === 'register' && (
-        <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200/80 shadow-xs space-y-6">
+        <div className="bg-white rounded-3xl p-4 sm:p-6 lg:p-8 border border-slate-200/80 shadow-xs space-y-6">
           <div className="flex items-center justify-between border-b border-slate-100 pb-4">
             <div>
               <h2 className="text-xl font-black text-slate-900">تسجيل دفع رسوم كشف أو خدمة</h2>
@@ -1230,7 +1230,7 @@ export const ClinicFinanceManager: React.FC<ClinicFinanceManagerProps> = ({
 
       {/* 4. TAB 2: OUTSTANDING BALANCES */}
       {activeTab === 'balances' && (
-        <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200/80 shadow-xs space-y-6">
+        <div className="bg-white rounded-3xl p-4 sm:p-6 lg:p-8 border border-slate-200/80 shadow-xs space-y-6">
           <div className="flex items-center justify-between border-b border-slate-100 pb-4">
             <div>
               <h2 className="text-xl font-black text-slate-900">المبالغ المستحقة المتبقية (الديون والآجل)</h2>
@@ -1309,7 +1309,7 @@ export const ClinicFinanceManager: React.FC<ClinicFinanceManagerProps> = ({
 
       {/* 5. TAB 3: TRANSACTION HISTORY & FILTERS */}
       {activeTab === 'history' && (
-        <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200/80 shadow-xs space-y-6">
+        <div className="bg-white rounded-3xl p-4 sm:p-6 lg:p-8 border border-slate-200/80 shadow-xs space-y-6">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
             <div>
               <h2 className="text-xl font-black text-slate-900">سجل المعاملات والمدفوعات</h2>
@@ -1419,7 +1419,7 @@ export const ClinicFinanceManager: React.FC<ClinicFinanceManagerProps> = ({
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-right text-xs">
+              <table className="w-full min-w-[640px] text-right text-xs">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
                     <th className="p-3 rounded-r-xl">المريض</th>
@@ -1514,7 +1514,7 @@ export const ClinicFinanceManager: React.FC<ClinicFinanceManagerProps> = ({
 
       {/* 6. TAB 4: EXPENSES MANAGEMENT */}
       {activeTab === 'expenses' && (
-        <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200/80 shadow-xs space-y-6">
+        <div className="bg-white rounded-3xl p-4 sm:p-6 lg:p-8 border border-slate-200/80 shadow-xs space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
             <div>
               <h2 className="text-xl font-black text-slate-900">إدارة مصروفات العيادة</h2>
@@ -1599,7 +1599,7 @@ export const ClinicFinanceManager: React.FC<ClinicFinanceManagerProps> = ({
 
       {/* 7. TAB 5: SERVICES & PRICING */}
       {activeTab === 'services' && (
-        <div className="bg-white rounded-3xl p-6 sm:p-8 border border-slate-200/80 shadow-xs space-y-6">
+        <div className="bg-white rounded-3xl p-4 sm:p-6 lg:p-8 border border-slate-200/80 shadow-xs space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
             <div>
               <h2 className="text-xl font-black text-slate-900">الخدمات والأسعار الطبية</h2>

@@ -103,8 +103,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
-      <div className="relative bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl border border-slate-100 text-right animate-in fade-in zoom-in-95 duration-200 my-8 max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto">
+      <div className="relative bg-white rounded-3xl max-w-2xl w-full p-4 sm:p-8 shadow-2xl border border-slate-100 text-right animate-in fade-in zoom-in-95 duration-200 my-4 sm:my-8 max-h-[90vh] overflow-y-auto">
         
         <button
           onClick={onClose}
@@ -390,7 +390,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <hr className="border-slate-100" />
 
           {/* Work Hours & Daily Limit */}
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">وقت الفتح</label>
               <input
@@ -425,18 +425,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
 
           {/* Action Footer */}
-          <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-100">
+          <div className="pt-4 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-2 sm:gap-3 border-t border-slate-100">
             <button
               type="button"
               onClick={onClose}
-              className="px-5 py-2.5 bg-slate-100 text-slate-700 font-bold text-xs rounded-xl hover:bg-slate-200 transition"
+              className="w-full sm:w-auto px-5 py-2.5 bg-slate-100 text-slate-700 font-bold text-xs rounded-xl hover:bg-slate-200 transition text-center cursor-pointer"
             >
               إلغاء
             </button>
             <button
               type="submit"
               disabled={isSaving}
-              className="px-7 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs rounded-xl transition shadow-md flex items-center gap-2 cursor-pointer"
+              className="w-full sm:w-auto px-7 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs rounded-xl transition shadow-md flex items-center justify-center gap-2 cursor-pointer"
             >
               <Save className="w-4 h-4" />
               <span>{isSaving ? 'جاري حفظ البيانات...' : 'حفظ التعديلات ونشرها'}</span>

@@ -177,8 +177,8 @@ export const CreateFollowUpModal: React.FC<CreateFollowUpModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
-      <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl border border-slate-100 text-right my-8 relative animate-in fade-in zoom-in-95 duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+      <div className="bg-white rounded-3xl max-w-lg w-full p-4 sm:p-8 shadow-2xl border border-slate-100 text-right my-4 sm:my-8 relative animate-in fade-in zoom-in-95 duration-200">
         
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-6">
@@ -380,11 +380,11 @@ export const CreateFollowUpModal: React.FC<CreateFollowUpModalProps> = ({
           </div>
 
           {/* Action Buttons */}
-          <div className="pt-3 flex items-center justify-end gap-3 border-t border-slate-100">
+          <div className="pt-3 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-2 sm:gap-3 border-t border-slate-100">
             <button
               type="button"
               onClick={onClose}
-              className="px-5 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition cursor-pointer"
+              className="w-full sm:w-auto px-5 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition cursor-pointer text-center"
             >
               إلغاء
             </button>
@@ -392,7 +392,7 @@ export const CreateFollowUpModal: React.FC<CreateFollowUpModalProps> = ({
             <button
               type="submit"
               disabled={loading}
-              className="px-6 py-2.5 rounded-2xl bg-gradient-to-r from-sky-600 to-sky-700 hover:from-sky-700 hover:to-sky-800 text-white font-extrabold text-xs sm:text-sm shadow-md shadow-sky-500/20 flex items-center gap-2 transition disabled:opacity-50 cursor-pointer"
+              className="w-full sm:w-auto px-6 py-2.5 rounded-2xl bg-gradient-to-r from-sky-600 to-sky-700 hover:from-sky-700 hover:to-sky-800 text-white font-extrabold text-xs sm:text-sm shadow-md shadow-sky-500/20 flex items-center justify-center gap-2 transition disabled:opacity-50 cursor-pointer text-center"
             >
               {loading ? (
                 <>

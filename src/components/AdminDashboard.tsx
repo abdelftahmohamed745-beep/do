@@ -685,7 +685,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onShowToast }) =
           ) : (
             <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
               <div className="overflow-x-auto">
-                <table className="w-full text-right border-collapse">
+                <table className="w-full min-w-[700px] text-right border-collapse">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 text-[11px] font-extrabold uppercase">
                       <th className="py-3.5 px-4">كود المرجع الثابت</th>
@@ -1170,7 +1170,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onShowToast }) =
               </div>
 
               <div className="overflow-x-auto">
-                <table className="w-full text-right border-collapse text-xs">
+                <table className="w-full min-w-[700px] text-right border-collapse text-xs">
                   <thead>
                     <tr className="bg-slate-100/80 border-b border-slate-200 text-slate-600 text-[11px] font-extrabold uppercase">
                       <th className="py-3 px-4">اسم المعمل والمسؤول</th>
@@ -1534,7 +1534,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onShowToast }) =
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-right border-collapse text-xs">
+              <table className="w-full min-w-[650px] text-right border-collapse text-xs">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 text-[11px] font-extrabold uppercase">
                     <th className="py-3 px-4">تاريخ العملية</th>
@@ -1629,7 +1629,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onShowToast }) =
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-right border-collapse text-xs">
+              <table className="w-full min-w-[600px] text-right border-collapse text-xs">
                 <thead>
                   <tr className="bg-slate-100/80 border-b border-slate-200 text-slate-600 text-[11px] font-extrabold uppercase">
                     <th className="py-3 px-4">اسم الحساب والنوع</th>

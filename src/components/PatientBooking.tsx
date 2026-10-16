@@ -304,7 +304,7 @@ export const PatientBooking: React.FC<PatientBookingProps> = ({
       <motion.div
         initial={{ opacity: 0, y: 15 }}
         animate={{ opacity: 1, y: 0 }}
-        className="bg-[#122c4a] text-white rounded-3xl p-6 sm:p-8 shadow-xl border border-[#1b3a5c] relative overflow-hidden mb-6 text-center"
+        className="bg-[#122c4a] text-white rounded-3xl p-4 sm:p-8 shadow-xl border border-[#1b3a5c] relative overflow-hidden mb-6 text-center"
       >
         <div className="w-14 h-14 rounded-2xl bg-[#f4efe6] text-[#122c4a] flex items-center justify-center mx-auto mb-4 shadow-lg font-bold">
           <Stethoscope className="w-7 h-7 text-[#122c4a]" />
@@ -350,9 +350,9 @@ export const PatientBooking: React.FC<PatientBookingProps> = ({
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          className="bg-[#fdfcf9] rounded-3xl p-6 sm:p-8 shadow-xl border border-[#e7e3da]"
+          className="bg-[#fdfcf9] rounded-3xl p-4 sm:p-8 shadow-xl border border-[#e7e3da]"
         >
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
             <div>
               <h2 className="text-xl font-bold text-[#122c4a] font-['Tajawal',sans-serif]">
                 احجز دورك الآن في صالة الانتظار
@@ -364,7 +364,7 @@ export const PatientBooking: React.FC<PatientBookingProps> = ({
             <button
               type="button"
               onClick={() => setShowRecoveryModal(!showRecoveryModal)}
-              className="px-2.5 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 rounded-xl text-[11px] font-bold border border-sky-200 flex items-center gap-1 transition cursor-pointer shrink-0"
+              className="self-start sm:self-auto px-2.5 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 rounded-xl text-[11px] font-bold border border-sky-200 flex items-center gap-1 transition cursor-pointer shrink-0"
               title="استرجاع تذكرة اليوم برمز الحجز أو رقم الهاتف"
             >
               <KeyRound className="w-3.5 h-3.5 text-sky-600" />

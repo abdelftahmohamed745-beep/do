@@ -139,10 +139,10 @@ export const ClinicProfilePage: React.FC<ClinicProfilePageProps> = ({
     <div className="max-w-5xl mx-auto px-4 py-8">
       
       {/* Back Navigation Header */}
-      <div className="flex items-center justify-between gap-4 mb-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <button
           onClick={onBackToDirectory}
-          className="inline-flex items-center gap-2 text-xs font-bold text-slate-600 hover:text-slate-900 bg-white px-4 py-2 rounded-xl border border-slate-200 shadow-2xs transition"
+          className="inline-flex items-center gap-2 text-xs font-bold text-slate-600 hover:text-slate-900 bg-white px-3 sm:px-4 py-2 rounded-xl border border-slate-200 shadow-2xs transition"
         >
           <ArrowRight className="w-4 h-4" />
           <span>العودة لدليل الأطباء</span>
@@ -150,7 +150,7 @@ export const ClinicProfilePage: React.FC<ClinicProfilePageProps> = ({
 
         <button
           onClick={handleCopyClinicLink}
-          className="inline-flex items-center gap-2 text-xs font-bold text-sky-700 bg-sky-50 hover:bg-sky-100 px-4 py-2 rounded-xl border border-sky-200 transition"
+          className="inline-flex items-center gap-2 text-xs font-bold text-sky-700 bg-sky-50 hover:bg-sky-100 px-3 sm:px-4 py-2 rounded-xl border border-sky-200 transition"
         >
           <Share2 className="w-4 h-4" />
           <span>مشاركة رابط العيادة</span>
@@ -158,7 +158,7 @@ export const ClinicProfilePage: React.FC<ClinicProfilePageProps> = ({
       </div>
 
       {/* Main Doctor & Clinic Hero Header */}
-      <div className="bg-white rounded-3xl border border-slate-200/90 p-6 sm:p-8 shadow-xl mb-8 relative overflow-hidden">
+      <div className="bg-white rounded-3xl border border-slate-200/90 p-4 sm:p-8 shadow-xl mb-8 relative overflow-hidden">
         <div className="absolute top-0 right-0 w-64 h-64 bg-sky-50 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20" />
         
         <div className="relative z-10 flex flex-col md:flex-row items-center md:items-start gap-6 text-center md:text-right">
@@ -231,15 +231,15 @@ export const ClinicProfilePage: React.FC<ClinicProfilePageProps> = ({
             </div>
 
             {/* Direct Action Phone & WhatsApp Buttons (Strictly if doctor provided number) */}
-            <div className="pt-4 flex flex-wrap items-center justify-center md:justify-start gap-3">
+            <div className="pt-4 flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center justify-center md:justify-start gap-2.5 sm:gap-3">
               
               {/* Call Button */}
               {hasPhone ? (
                 <a
                   href={`tel:${cleanPhone}`}
-                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs sm:text-sm font-extrabold shadow-md transition active:scale-95"
+                  className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs sm:text-sm font-extrabold shadow-md transition active:scale-95 w-full sm:w-auto"
                 >
-                  <Phone className="w-4 h-4" />
+                  <Phone className="w-4 h-4 shrink-0" />
                   <span>اتصل بالطبيب ({rawPhone})</span>
                 </a>
               ) : null}
@@ -250,9 +250,9 @@ export const ClinicProfilePage: React.FC<ClinicProfilePageProps> = ({
                   href={`https://wa.me/${cleanWhatsapp}?text=${encodeURIComponent(`مرحبًا دكتور ${doctor.name}، أريد الاستفسار وحجز موعد في عيادتكم.`)}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs sm:text-sm font-extrabold shadow-md transition active:scale-95"
+                  className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs sm:text-sm font-extrabold shadow-md transition active:scale-95 w-full sm:w-auto"
                 >
-                  <MessageCircle className="w-4 h-4 fill-current" />
+                  <MessageCircle className="w-4 h-4 fill-current shrink-0" />
                   <span>تواصل مع الطبيب عبر واتساب</span>
                 </a>
               ) : null}
@@ -268,9 +268,9 @@ export const ClinicProfilePage: React.FC<ClinicProfilePageProps> = ({
                     console.log('[DIAGNOSTIC] AFTER_URL', typeof window !== 'undefined' ? window.location.href : '');
                   }, 300);
                 }}
-                className="inline-flex items-center gap-2 px-6 py-2.5 bg-teal-800 hover:bg-teal-900 text-white rounded-xl text-xs sm:text-sm font-bold shadow-2xs transition active:scale-95 cursor-pointer relative z-10"
+                className="inline-flex items-center justify-center gap-2 px-6 py-2.5 bg-teal-800 hover:bg-teal-900 text-white rounded-xl text-xs sm:text-sm font-bold shadow-2xs transition active:scale-95 cursor-pointer relative z-10 w-full sm:w-auto"
               >
-                <Ticket className="w-4 h-4" />
+                <Ticket className="w-4 h-4 shrink-0" />
                 <span>احجز دورك الآن أونلاين</span>
               </button>
 

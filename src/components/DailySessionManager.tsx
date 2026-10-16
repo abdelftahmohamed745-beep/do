@@ -462,11 +462,11 @@ export const DailySessionManager: React.FC<DailySessionManagerProps> = ({
             )}
 
             {/* Actions */}
-            <div className="flex items-center justify-end gap-3 pt-2">
+            <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-2 sm:gap-3 pt-2">
               <button
                 type="button"
                 onClick={() => setShowCompleteModal(false)}
-                className="px-4 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                className="w-full sm:w-auto px-4 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-100 cursor-pointer text-center"
               >
                 إلغاء
               </button>
@@ -474,7 +474,7 @@ export const DailySessionManager: React.FC<DailySessionManagerProps> = ({
                 type="button"
                 onClick={handleConfirmCompleteDay}
                 disabled={isCompleting}
-                className="px-6 py-2.5 bg-slate-900 hover:bg-black text-white rounded-xl text-xs font-extrabold shadow-md transition cursor-pointer disabled:opacity-50"
+                className="w-full sm:w-auto px-6 py-2.5 bg-slate-900 hover:bg-black text-white rounded-xl text-xs font-extrabold shadow-md transition cursor-pointer disabled:opacity-50 text-center"
               >
                 {isCompleting ? 'جاري الأرشفة...' : 'تأكيد إغلاق اليوم والأرشفة'}
               </button>

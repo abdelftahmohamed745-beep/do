@@ -930,7 +930,8 @@ import {
   limit,
   runTransaction,
   increment,
-  writeBatch
+  writeBatch,
+  startAfter
 } from "firebase/firestore";
 
 // src/services/securityService.ts
@@ -1274,14 +1275,31 @@ async function checkActiveBooking(doctorId, phone) {
   const normalizedPhone = normalizePhoneNumber(phone);
   if (!normalizedPhone) return null;
   const today = getTodayDateString();
-  const q = query(
-    collection2(db, "queues", doctorId, "patients"),
-    where("date", "==", today),
-    where("phone", "==", normalizedPhone)
-  );
-  const snapshot = await getDocs(q);
-  const activeDoc = snapshot.docs.map((d) => ({ id: d.id, ...d.data() })).find((p) => p.status === "waiting" || p.status === "called");
-  return activeDoc || null;
+  const deterministicDocId = `${today}_${normalizedPhone}`;
+  try {
+    const directDocRef = doc(db, "queues", doctorId, "patients", deterministicDocId);
+    const snap = await getDoc(directDocRef);
+    if (snap.exists()) {
+      const p = { id: snap.id, ...snap.data() };
+      if (p.status === "waiting" || p.status === "called") {
+        return p;
+      }
+    }
+  } catch (err) {
+    console.warn("Direct ticket lookup failed in checkActiveBooking:", err);
+  }
+  try {
+    const q = query(
+      collection2(db, "queues", doctorId, "patients"),
+      where("date", "==", today),
+      where("phone", "==", normalizedPhone)
+    );
+    const snapshot = await getDocs(q);
+    const activeDoc = snapshot.docs.map((d) => ({ id: d.id, ...d.data() })).find((p) => p.status === "waiting" || p.status === "called");
+    return activeDoc || null;
+  } catch {
+    return null;
+  }
 }
 async function bookPatient(doctorId, name, phone, userId, notificationPreference = "two_turns", selectedService) {
   const cleanName = sanitizeInput(name);
@@ -3717,7 +3735,7 @@ function sanitizeParameters(args) {
 // src/server/aiAgentServer.ts
 var geminiClient = null;
 function getGemini() {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
   if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
     return null;
   }
@@ -3795,11 +3813,14 @@ function classifyProviderError(err) {
       originalMessage: effectiveMsg
     };
   }
-  const isDailyQuotaExhausted = effectiveMsg.includes("Quota exceeded") || effectiveMsg.includes("QuotaFailure") || effectiveMsg.includes("RESOURCE_EXHAUSTED") || effectiveMsg.includes("free_tier_requests") || effectiveMsg.includes("retry in");
-  if (status === 429 || effectiveMsg.includes("429") || isDailyQuotaExhausted || effectiveMsg.includes("quota") || effectiveMsg.includes("Rate Limit")) {
+  const hasDailyIndicator = effectiveMsg.includes("GenerateRequestsPerDay") || effectiveMsg.includes("free_tier_requests") || effectiveMsg.includes("daily limit") || effectiveMsg.includes("PerDay");
+  const isDailyQuotaExhausted = Boolean(!retryAfterMs && hasDailyIndicator);
+  const isRateLimit = status === 429 || effectiveMsg.includes("429") || effectiveMsg.includes("RESOURCE_EXHAUSTED") || effectiveMsg.includes("quota") || effectiveMsg.includes("Quota") || effectiveMsg.includes("Rate Limit");
+  if (isRateLimit || isDailyQuotaExhausted) {
+    const isRetryable = !isDailyQuotaExhausted;
     return {
       category: "RATE_LIMIT",
-      isRetryable: !isDailyQuotaExhausted,
+      isRetryable,
       isDailyQuotaExhausted,
       status: 429,
       retryAfterMs,
@@ -3878,15 +3899,15 @@ function calculateBackoffDelay(attempt, retryAfterMs) {
   return Math.min(5e3, delay);
 }
 var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-var AI_REQUEST_TIMEOUT_MS = Number(process.env.AI_REQUEST_TIMEOUT_MS) || 12e3;
+var AI_REQUEST_TIMEOUT_MS = Number(process.env.AI_REQUEST_TIMEOUT_MS) || 8e3;
 var TOTAL_AI_BUDGET_MS = Number(process.env.AI_TOTAL_BUDGET_MS) || 24e3;
 var MAX_TRANSIENT_RETRIES = 1;
 var CANDIDATE_MODELS = [
-  process.env.GEMINI_MODEL,
   "gemini-3.1-flash-lite",
   "gemini-flash-latest",
+  process.env.GEMINI_MODEL ? process.env.GEMINI_MODEL.replace(/^models\//, "") : void 0,
   "gemini-3.8-flash"
-].filter(Boolean);
+].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
 async function generateWithCascade(ai, contents, config, timeoutMs = AI_REQUEST_TIMEOUT_MS) {
   let lastClassifiedError = null;
   const overallStartTime = Date.now();
@@ -4568,13 +4589,6 @@ async function handleDeterministicIntent(params) {
     const reply = res.status === "success" ? `\u062A\u0645 \u0625\u0646\u0634\u0627\u0621 \u0648\u062A\u0641\u0639\u064A\u0644 \u0627\u0644\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0622\u0644\u064A\u0629 \u0627\u0644\u0630\u0643\u064A\u0629 \u0628\u0646\u062C\u0627\u062D! \u0633\u064A\u0642\u0648\u0645 \u0648\u0643\u064A\u0644 \u062F\u0648\u0631\u064A \u0628\u0645\u0631\u0627\u0642\u0628\u0629 \u0627\u0644\u0637\u0627\u0628\u0648\u0631 \u0648\u062A\u0646\u0628\u064A\u0647 \u0637\u0627\u0642\u0645 \u0627\u0644\u0639\u064A\u0627\u062F\u0629 \u0639\u0646\u062F \u062A\u062E\u0637\u064A \u0648\u0642\u062A \u0627\u0644\u0627\u0646\u062A\u0638\u0627\u0631 \u0627\u0644\u0645\u062D\u062F\u062F.` : `\u062A\u0639\u0630\u0631 \u0625\u0646\u0634\u0627\u0621 \u0627\u0644\u0642\u0627\u0639\u062F\u0629 \u0627\u0644\u0622\u0644\u064A\u0629: ${res.error}`;
     return { reply, toolCalls, toolResults, status: res.status === "success" ? "done" : "failed" };
   }
-  if (geminiErrorMessage) {
-    const cleanErrStr = typeof geminiErrorMessage === "string" && geminiErrorMessage !== "[object Object]" && geminiErrorMessage.trim() ? geminiErrorMessage.trim() : "\u062A\u0639\u0630\u0631 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0645\u0632\u0648\u062F \u0627\u0644\u062E\u062F\u0645\u0629 \u062D\u0627\u0644\u064A\u0627\u064B";
-    return {
-      reply: `\u0639\u0641\u0648\u0627\u064B\u060C \u062A\u0639\u0630\u0631 \u0639\u0644\u0649 \u0627\u0644\u0648\u0643\u064A\u0644 \u0627\u0644\u0630\u0643\u064A \u0625\u062A\u0645\u0627\u0645 \u0637\u0644\u0628\u0643 \u0639\u0628\u0631 \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A (${cleanErrStr}). \u064A\u0631\u062C\u0649 \u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629 \u0644\u0627\u062D\u0642\u0627\u064B \u0623\u0648 \u0627\u0633\u062A\u062E\u062F\u0627\u0645 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629 \u0644\u0644\u0637\u0627\u0628\u0648\u0631 \u0648\u0627\u0644\u0645\u0627\u0644\u064A\u0629 \u0648\u0627\u0644\u0645\u0631\u0636\u0649.`,
-      status: "failed"
-    };
-  }
   const isGreeting = t === "\u0645\u0631\u062D\u0628\u0627" || t === "\u0623\u0647\u0644\u0627" || t === "\u0627\u0647\u0644\u0627" || t.includes("\u0627\u0644\u0633\u0644\u0627\u0645 \u0639\u0644\u064A\u0643\u0645") || t === "\u0635\u0628\u0627\u062D \u0627\u0644\u062E\u064A\u0631" || t === "\u0645\u0633\u0627\u0621 \u0627\u0644\u062E\u064A\u0631" || t === "hi" || t === "hello";
   if (isGreeting) {
     return {
@@ -4598,8 +4612,25 @@ async function handleDeterministicIntent(params) {
       status: "done"
     };
   }
+  const isDiagnosticRequest = t.includes("\u0645\u0634\u0627\u0643\u0644") || t.includes("\u0627\u0641\u062D\u0635") || t.includes("\u0641\u062D\u0635") || t.includes("ai") || t.includes("\u062D\u0627\u0644\u0629 \u0627\u0644\u0646\u0638\u0627\u0645") || t.includes("\u062A\u0634\u062E\u064A\u0635") || t.includes("\u0639\u0627\u0644\u062C \u0643\u0644");
+  if (isDiagnosticRequest) {
+    return {
+      reply: '\u0623\u0647\u0644\u0627\u064B \u0628\u0643 \u064A\u0627 \u062F\u0643\u062A\u0648\u0631. \u064A\u0639\u0645\u0644 \u0648\u0643\u064A\u0644 \u062F\u0648\u0631\u064A \u0627\u0644\u0630\u0643\u064A \u0628\u0643\u0627\u0645\u0644 \u0637\u0627\u0642\u062A\u0647 \u0627\u0644\u062A\u0634\u063A\u064A\u0644\u064A\u0629 \u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629 \u0627\u0644\u0645\u062F\u0645\u062C\u0629 \u0641\u064A \u0639\u064A\u0627\u062F\u062A\u0643. \u064A\u0645\u0643\u0646\u0643 \u0627\u0644\u0627\u0633\u062A\u0641\u0627\u062F\u0629 \u0645\u0646 \u062C\u0645\u064A\u0639 \u0642\u062F\u0631\u0627\u062A \u0627\u0644\u0646\u0638\u0627\u0645 \u0627\u0644\u0641\u0648\u0631\u064A\u0629:\n\u2022 \u0627\u0644\u0637\u0627\u0628\u0648\u0631: "\u0645\u064A\u0646 \u0641\u064A \u0627\u0644\u0637\u0627\u0628\u0648\u0631"\u060C "\u0646\u0627\u062F\u0650 \u0639\u0644\u0649 \u0627\u0644\u0645\u0631\u064A\u0636 \u0627\u0644\u062A\u0627\u0644\u064A"\n\u2022 \u0627\u0644\u0645\u0627\u0644\u064A\u0629: "\u0645\u0644\u062E\u0635 \u0627\u0644\u0625\u064A\u0631\u0627\u062F\u0627\u062A"\u060C "\u0633\u062C\u0644 \u062F\u0641\u0639 [\u0627\u0644\u0645\u0628\u0644\u063A] \u062C \u0644\u0644\u0645\u0631\u064A\u0636"\n\u2022 \u0627\u0644\u0645\u0631\u0636\u0649: "\u0627\u0628\u062D\u062B \u0639\u0646 \u0645\u0644\u0641 \u0627\u0644\u0645\u0631\u064A\u0636 [\u0627\u0644\u0627\u0633\u0645 \u0623\u0648 \u0627\u0644\u0647\u0627\u062A\u0641]"\n\u2022 \u0627\u0644\u0645\u0648\u0627\u0639\u064A\u062F: "\u0645\u0648\u0627\u0639\u064A\u062F \u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u0643\u0634\u0641"\n\u0625\u0630\u0627 \u0643\u0627\u0646 \u0644\u062F\u064A\u0643 \u0623\u0645\u0631 \u0645\u062D\u062F\u062F \u062A\u0648\u062F \u062A\u0646\u0641\u064A\u0630\u0647 \u0627\u0644\u0622\u0646\u060C \u0627\u0643\u062A\u0628\u0647 \u0648\u0633\u0623\u0642\u0648\u0645 \u0628\u0647 \u0639\u0644\u0649 \u0627\u0644\u0641\u0648\u0631.',
+      status: "done"
+    };
+  }
+  if (geminiErrorMessage) {
+    let cleanErrStr = typeof geminiErrorMessage === "string" && geminiErrorMessage.trim() ? geminiErrorMessage.trim() : "\u062A\u0639\u0630\u0631 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0645\u0632\u0648\u062F \u0627\u0644\u062E\u062F\u0645\u0629 \u062D\u0627\u0644\u064A\u0627\u064B";
+    if (cleanErrStr.includes("[object Object]") || cleanErrStr === "{}") {
+      cleanErrStr = "\u062A\u0639\u0630\u0631 \u0627\u0644\u0627\u062A\u0635\u0627\u0644 \u0628\u0645\u0632\u0648\u062F \u0627\u0644\u062E\u062F\u0645\u0629 \u062D\u0627\u0644\u064A\u0627\u064B";
+    }
+    return {
+      reply: `\u0639\u0641\u0648\u0627\u064B\u060C \u062A\u0639\u0630\u0631 \u0639\u0644\u0649 \u0627\u0644\u0648\u0643\u064A\u0644 \u0627\u0644\u0630\u0643\u064A \u0625\u062A\u0645\u0627\u0645 \u0637\u0644\u0628\u0643 \u0639\u0628\u0631 \u0627\u0644\u0645\u0639\u0627\u0644\u062C\u0629 \u0627\u0644\u0644\u063A\u0648\u064A\u0629 \u0627\u0644\u0645\u062A\u0642\u062F\u0645\u0629 (${cleanErrStr}). \u064A\u0645\u0643\u0646\u0643 \u0627\u0633\u062A\u062E\u062F\u0627\u0645 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629 \u0644\u0644\u0637\u0627\u0628\u0648\u0631 \u0648\u0627\u0644\u0645\u0627\u0644\u064A\u0629 \u0648\u0627\u0644\u0645\u0631\u0636\u0649 \u0648\u0633\u0623\u0642\u0648\u0645 \u0628\u062A\u0646\u0641\u064A\u0630\u0647\u0627 \u0639\u0644\u0649 \u0627\u0644\u0641\u0648\u0631.`,
+      status: "failed"
+    };
+  }
   return {
-    reply: '\u0644\u0645 \u0623\u062A\u0645\u0643\u0646 \u0645\u0646 \u0627\u0644\u062A\u0639\u0631\u0641 \u0639\u0644\u0649 \u0647\u0630\u0627 \u0627\u0644\u0623\u0645\u0631. \u064A\u0645\u0643\u0646\u0643 \u0627\u0633\u062A\u062E\u062F\u0627\u0645 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629 (\u0645\u062B\u0644: "\u0645\u064A\u0646 \u0641\u064A \u0627\u0644\u0637\u0627\u0628\u0648\u0631"\u060C "\u0646\u0627\u062F\u0650 \u0639\u0644\u0649 \u0627\u0644\u0645\u0631\u064A\u0636 \u0627\u0644\u062A\u0627\u0644\u064A"\u060C "\u0633\u062C\u0644 \u062F\u0641\u0639 300"\u060C "\u0645\u0644\u062E\u0635 \u0627\u0644\u0625\u064A\u0631\u0627\u062F\u0627\u062A")\u060C \u0623\u0648 \u0627\u0644\u062A\u0623\u0643\u062F \u0645\u0646 \u062A\u0648\u0641\u0631 \u0645\u0641\u062A\u0627\u062D \u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064A \u0644\u0644\u0645\u062D\u0627\u062F\u062B\u0629 \u0627\u0644\u062D\u0631\u0629.',
+    reply: '\u0644\u0645 \u0623\u062A\u0645\u0643\u0646 \u0645\u0646 \u0627\u0644\u062A\u0639\u0631\u0641 \u0639\u0644\u0649 \u0647\u0630\u0627 \u0627\u0644\u0623\u0645\u0631. \u064A\u0645\u0643\u0646\u0643 \u0627\u0633\u062A\u062E\u062F\u0627\u0645 \u0627\u0644\u0623\u0648\u0627\u0645\u0631 \u0627\u0644\u0645\u0628\u0627\u0634\u0631\u0629 (\u0645\u062B\u0644: "\u0645\u064A\u0646 \u0641\u064A \u0627\u0644\u0637\u0627\u0628\u0648\u0631"\u060C "\u0646\u0627\u062F\u0650 \u0639\u0644\u0649 \u0627\u0644\u0645\u0631\u064A\u0636 \u0627\u0644\u062A\u0627\u0644\u064A"\u060C "\u0633\u062C\u0644 \u062F\u0641\u0639 300"\u060C "\u0645\u0644\u062E\u0635 \u0627\u0644\u0625\u064A\u0631\u0627\u062F\u0627\u062A")\u060C \u0648\u0633\u0623\u0642\u0648\u0645 \u0628\u062A\u0646\u0641\u064A\u0630\u0647 \u0641\u0648\u0631\u0627\u064B.',
     status: "failed"
   };
 }

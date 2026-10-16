@@ -116,6 +116,32 @@
   border-color: #0d5c58;
 }
 
+/* Mobile Safe Area & Touch Utilities */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.min-h-screen-safe {
+  min-height: calc(100vh - env(safe-area-inset-bottom, 0px) - env(safe-area-inset-top, 0px));
+}
+
+/* Hide scrollbar while preserving smooth horizontal swiping on touch screens */
+.no-scrollbar::-webkit-scrollbar,
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar,
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
 /* Print Specific Optimizations */
 @media print {
   body {

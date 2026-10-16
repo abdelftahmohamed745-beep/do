@@ -10,16 +10,60 @@ service firebase.storage {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.admin == true ||
+        (request.auth.token.email != null && request.auth.token.email_verified == true && (
+          request.auth.token.email.lower() == 'bkay38757@gmail.com' ||
+          request.auth.token.email.lower() == 'abdelftahmohamed745@gmail.com' || 
+          request.auth.token.email.lower() == 'admin@dawry.app'
+        ))
+      );
+    }
+
     function isImageUpload() {
       return request.resource.contentType.matches('image/(jpeg|png|jpg|webp)')
         && request.resource.size < 5 * 1024 * 1024; // 5MB limit
     }
 
-    // Doctor profile & clinic photos storage
-    match /doctors/{doctorId}/{allPaths=**} {
+    // Public doctor profile pictures and clinic branding
+    match /doctors/{doctorId}/public/{allPaths=**} {
       allow read: if true;
-      allow write: if (isOwner(doctorId) || request.auth.token.admin == true) && isImageUpload();
-      allow delete: if isOwner(doctorId) || request.auth.token.admin == true;
+      allow write: if (isOwner(doctorId) || isAdmin()) && isImageUpload();
+      allow delete: if isOwner(doctorId) || isAdmin();
+    }
+
+    // Legacy doctor profile image path
+    match /doctors/{doctorId}/profile.{ext} {
+      allow read: if true;
+      allow write: if (isOwner(doctorId) || isAdmin()) && isImageUpload();
+      allow delete: if isOwner(doctorId) || isAdmin();
+    }
+
+    // Legacy clinic gallery photo path
+    match /doctors/{doctorId}/clinic_{imgId}.{ext} {
+      allow read: if true;
+      allow write: if (isOwner(doctorId) || isAdmin()) && isImageUpload();
+      allow delete: if isOwner(doctorId) || isAdmin();
+    }
+
+    // Restricted Patient Medical Attachments (Doctor owner, clinic staff, or Admin ONLY)
+    match /doctors/{doctorId}/medicalFiles/{allPaths=**} {
+      allow read, write: if isOwner(doctorId) || isAdmin();
+      allow delete: if isOwner(doctorId) || isAdmin();
+    }
+
+    // Public lab branding photos
+    match /labs/{labId}/public/{allPaths=**} {
+      allow read: if true;
+      allow write: if (isOwner(labId) || isAdmin()) && isImageUpload();
+      allow delete: if isOwner(labId) || isAdmin();
+    }
+
+    // Restricted Lab result files
+    match /labs/{labId}/results/{resultId}/{allPaths=**} {
+      allow read, write: if isAuthenticated() && (isOwner(labId) || isAdmin());
+      allow delete: if isOwner(labId) || isAdmin();
     }
 
     // Deny all other unhandled storage accesses

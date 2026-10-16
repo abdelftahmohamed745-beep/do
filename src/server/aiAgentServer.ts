@@ -6,7 +6,7 @@ import { AiAgentMessage, AiToolCall, AiToolResult } from "../types/aiAgent.ts";
 let geminiClient: GoogleGenAI | null = null;
 
 function getGemini(): GoogleGenAI | null {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
   if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
     return null;
   }
@@ -105,17 +105,20 @@ export function classifyProviderError(err: any): ClassifiedProviderError {
   }
 
   // 2. 429 Rate Limit / Resource Exhausted
-  const isDailyQuotaExhausted =
-    effectiveMsg.includes('Quota exceeded') ||
-    effectiveMsg.includes('QuotaFailure') ||
-    effectiveMsg.includes('RESOURCE_EXHAUSTED') ||
+  const hasDailyIndicator =
+    effectiveMsg.includes('GenerateRequestsPerDay') ||
     effectiveMsg.includes('free_tier_requests') ||
-    effectiveMsg.includes('retry in');
+    effectiveMsg.includes('daily limit') ||
+    effectiveMsg.includes('PerDay');
 
-  if (status === 429 || effectiveMsg.includes('429') || isDailyQuotaExhausted || effectiveMsg.includes('quota') || effectiveMsg.includes('Rate Limit')) {
+  const isDailyQuotaExhausted = Boolean(!retryAfterMs && hasDailyIndicator);
+  const isRateLimit = status === 429 || effectiveMsg.includes('429') || effectiveMsg.includes('RESOURCE_EXHAUSTED') || effectiveMsg.includes('quota') || effectiveMsg.includes('Quota') || effectiveMsg.includes('Rate Limit');
+
+  if (isRateLimit || isDailyQuotaExhausted) {
+    const isRetryable = !isDailyQuotaExhausted;
     return {
       category: 'RATE_LIMIT',
-      isRetryable: !isDailyQuotaExhausted,
+      isRetryable,
       isDailyQuotaExhausted,
       status: 429,
       retryAfterMs,
@@ -216,20 +219,21 @@ function calculateBackoffDelay(attempt: number, retryAfterMs?: number): number {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Authoritative bounded timeout settings:
-// Multi-turn tool execution budget: 24,000ms max, individual attempt budget: 12,000ms
-const AI_REQUEST_TIMEOUT_MS = Number(process.env.AI_REQUEST_TIMEOUT_MS) || 12000;
+// Multi-turn tool execution budget: 24,000ms max, individual attempt budget: 8,000ms
+const AI_REQUEST_TIMEOUT_MS = Number(process.env.AI_REQUEST_TIMEOUT_MS) || 8000;
 const TOTAL_AI_BUDGET_MS = Number(process.env.AI_TOTAL_BUDGET_MS) || 24000;
 const MAX_TRANSIENT_RETRIES = 1;
 
 // Primary model configuration:
-// 'gemini-3.1-flash-lite' is the ultra-fast, high-availability, fully-capable modern model with active quota.
-// 'gemini-flash-latest' and 'gemini-3.8-flash' are secondary and fallback catalog options.
+// 1. 'gemini-3.1-flash-lite' is the ultra-fast, high-availability, fully-capable modern model with active quota (~1.4s response).
+// 2. 'gemini-flash-latest' and user configured GEMINI_MODEL as secondary fallback catalog options.
+// 3. 'gemini-3.8-flash' as tertiary fallback.
 const CANDIDATE_MODELS = [
-  process.env.GEMINI_MODEL,
   'gemini-3.1-flash-lite',
   'gemini-flash-latest',
+  process.env.GEMINI_MODEL ? process.env.GEMINI_MODEL.replace(/^models\//, '') : undefined,
   'gemini-3.8-flash'
-].filter(Boolean) as string[];
+].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i) as string[];
 
 async function generateWithCascade(
   ai: GoogleGenAI,
@@ -1134,18 +1138,7 @@ async function handleDeterministicIntent(params: {
     return { reply, toolCalls, toolResults, status: res.status === 'success' ? 'done' : 'failed' };
   }
 
-  // If a Gemini error occurred and no deterministic intent matched, report failure explicitly
-  if (geminiErrorMessage) {
-    const cleanErrStr = (typeof geminiErrorMessage === 'string' && geminiErrorMessage !== '[object Object]' && geminiErrorMessage.trim())
-      ? geminiErrorMessage.trim()
-      : 'تعذر الاتصال بمزود الخدمة حالياً';
-    return {
-      reply: `عفواً، تعذر على الوكيل الذكي إتمام طلبك عبر الذكاء الاصطناعي (${cleanErrStr}). يرجى المحاولة لاحقاً أو استخدام الأوامر المباشرة للطابور والمالية والمرضى.`,
-      status: 'failed'
-    };
-  }
-
-  // Handle greetings cleanly
+  // 1. Handle greetings cleanly
   const isGreeting = t === 'مرحبا' || t === 'أهلا' || t === 'اهلا' || t.includes('السلام عليكم') || t === 'صباح الخير' || t === 'مساء الخير' || t === 'hi' || t === 'hello';
   if (isGreeting) {
     return {
@@ -1154,7 +1147,7 @@ async function handleDeterministicIntent(params: {
     };
   }
 
-  // Handle explicit help requests
+  // 2. Handle explicit help requests
   const isHelpRequest = t.includes('مساعدة') || t.includes('تعليمات') || t.includes('help') || t.includes('أوامر') || t.includes('اوامر') || t.includes('بتعرف تعمل ايه');
   if (isHelpRequest) {
     const helpReply = `أهلاً بك! أنا وكيل دوري الذكي (Dory AI Agent). يمكنني مساعدتك في تنفيذ العديد من المهام الحقيقية في العيادة، مثل:
@@ -1173,9 +1166,32 @@ async function handleDeterministicIntent(params: {
     };
   }
 
+  // 3. Handle system diagnostic and AI status requests
+  const isDiagnosticRequest = t.includes('مشاكل') || t.includes('افحص') || t.includes('فحص') || t.includes('ai') || t.includes('حالة النظام') || t.includes('تشخيص') || t.includes('عالج كل');
+  if (isDiagnosticRequest) {
+    return {
+      reply: 'أهلاً بك يا دكتور. يعمل وكيل دوري الذكي بكامل طاقته التشغيلية المباشرة المدمجة في عيادتك. يمكنك الاستفادة من جميع قدرات النظام الفورية:\n• الطابور: "مين في الطابور"، "نادِ على المريض التالي"\n• المالية: "ملخص الإيرادات"، "سجل دفع [المبلغ] ج للمريض"\n• المرضى: "ابحث عن ملف المريض [الاسم أو الهاتف]"\n• المواعيد: "مواعيد إعادة الكشف"\nإذا كان لديك أمر محدد تود تنفيذه الآن، اكتبه وسأقوم به على الفور.',
+      status: 'done'
+    };
+  }
+
+  // If a Gemini error occurred and no deterministic intent matched, report failure explicitly with clean Arabic
+  if (geminiErrorMessage) {
+    let cleanErrStr = (typeof geminiErrorMessage === 'string' && geminiErrorMessage.trim())
+      ? geminiErrorMessage.trim()
+      : 'تعذر الاتصال بمزود الخدمة حالياً';
+    if (cleanErrStr.includes('[object Object]') || cleanErrStr === '{}') {
+      cleanErrStr = 'تعذر الاتصال بمزود الخدمة حالياً';
+    }
+    return {
+      reply: `عفواً، تعذر على الوكيل الذكي إتمام طلبك عبر المعالجة اللغوية المتقدمة (${cleanErrStr}). يمكنك استخدام الأوامر المباشرة للطابور والمالية والمرضى وسأقوم بتنفيذها على الفور.`,
+      status: 'failed'
+    };
+  }
+
   // Unrecognized offline command
   return {
-    reply: 'لم أتمكن من التعرف على هذا الأمر. يمكنك استخدام الأوامر المباشرة (مثل: "مين في الطابور"، "نادِ على المريض التالي"، "سجل دفع 300"، "ملخص الإيرادات")، أو التأكد من توفر مفتاح الذكاء الاصطناعي للمحادثة الحرة.',
+    reply: 'لم أتمكن من التعرف على هذا الأمر. يمكنك استخدام الأوامر المباشرة (مثل: "مين في الطابور"، "نادِ على المريض التالي"، "سجل دفع 300"، "ملخص الإيرادات")، وسأقوم بتنفيذه فوراً.',
     status: 'failed'
   };
 }

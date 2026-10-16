@@ -105,13 +105,13 @@ export const TVQueueDisplay: React.FC<TVQueueDisplayProps> = ({
       </header>
 
       {/* Main TV Display Stage */}
-      <div className="flex-1 p-6 sm:p-10 grid lg:grid-cols-12 gap-8 items-stretch min-h-0 overflow-y-auto">
+      <div className="flex-1 p-4 sm:p-8 lg:p-10 grid lg:grid-cols-12 gap-6 lg:gap-8 items-stretch min-h-0 overflow-y-auto">
         
         {/* CURRENT TURN CARD (HERO) */}
-        <div className="lg:col-span-7 bg-gradient-to-b from-slate-900 to-slate-900/95 border-2 border-teal-500/80 rounded-3xl p-8 sm:p-12 flex flex-col justify-between shadow-2xl relative overflow-hidden">
+        <div className="lg:col-span-7 bg-gradient-to-b from-slate-900 to-slate-900/95 border-2 border-teal-500/80 rounded-3xl p-5 sm:p-8 lg:p-12 flex flex-col justify-between shadow-2xl relative overflow-hidden">
           
-          <div className="flex items-center justify-between mb-6">
-            <div className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-teal-500/20 border border-teal-400/40 text-teal-300 font-extrabold text-sm sm:text-base">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+            <div className="inline-flex items-center gap-2 px-4 sm:px-5 py-2 rounded-full bg-teal-500/20 border border-teal-400/40 text-teal-300 font-extrabold text-xs sm:text-base">
               <span className="relative flex h-3 w-3">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-3 w-3 bg-teal-500"></span>
@@ -119,20 +119,20 @@ export const TVQueueDisplay: React.FC<TVQueueDisplayProps> = ({
               <span>الدور الحالي داخل العيادة</span>
             </div>
 
-            <div className="text-slate-400 text-sm font-bold flex items-center gap-2 bg-slate-800/80 px-4 py-2 rounded-2xl border border-slate-700">
+            <div className="text-slate-400 text-xs sm:text-sm font-bold flex items-center gap-2 bg-slate-800/80 px-3 sm:px-4 py-2 rounded-2xl border border-slate-700">
               <Users className="w-4 h-4 text-teal-400" />
               <span>إجمالي المتبقين: {waitingPatients.length} مريض</span>
             </div>
           </div>
 
           {calledPatient ? (
-            <div className="my-auto text-center space-y-6 py-6">
-              <div className="text-sm sm:text-lg font-bold text-slate-400 tracking-wider">
+            <div className="my-auto text-center space-y-4 sm:space-y-6 py-4 sm:py-6">
+              <div className="text-xs sm:text-lg font-bold text-slate-400 tracking-wider">
                 يرجى التفضل بالدخول للطبيب
               </div>
 
               {/* HUGE TURN NUMBER */}
-              <div className="text-8xl sm:text-9xl font-black text-amber-400 font-mono tracking-tighter drop-shadow-[0_10px_25px_rgba(251,191,36,0.25)]">
+              <div className="text-7xl sm:text-9xl font-black text-amber-400 font-mono tracking-tighter drop-shadow-[0_10px_25px_rgba(251,191,36,0.25)]">
                 #{calledPatient.sequenceNumber}
               </div>
 

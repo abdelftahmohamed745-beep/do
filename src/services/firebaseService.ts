@@ -14,7 +14,8 @@ import {
   limit,
   runTransaction,
   increment,
-  writeBatch
+  writeBatch,
+  startAfter
 } from "firebase/firestore";
 import { db } from "../firebase/config.ts";
 import {
@@ -274,24 +275,42 @@ export async function findTicketByReferenceOrPhone(
   if (!cleanTerm || !doctorId) return null;
 
   const today = getTodayDateString();
-  const queueColRef = collection(db, "queues", doctorId, "patients");
 
   try {
-    // 1. Match by Booking Reference (e.g. D-4821)
+    // 1. Direct lookup by Deterministic Phone Document ID or Ticket ID (Works for unauthenticated patients with allow get)
+    const normalizedPhone = normalizePhoneNumber(queryTerm);
+    if (normalizedPhone) {
+      const deterministicDocRef = doc(db, "queues", doctorId, "patients", `${today}_${normalizedPhone}`);
+      const directSnap = await getDoc(deterministicDocRef);
+      if (directSnap.exists()) {
+        const d = directSnap.data() as PatientRecord;
+        if (d.status === 'waiting' || d.status === 'called' || d.date === today) {
+          return { id: directSnap.id, ...d };
+        }
+      }
+    }
+
+    // Direct lookup by raw queryTerm (e.g. ticketId in URL or localStorage)
+    const directRef = doc(db, "queues", doctorId, "patients", queryTerm.trim());
+    const directDoc = await getDoc(directRef);
+    if (directDoc.exists()) {
+      return { id: directDoc.id, ...directDoc.data() } as PatientRecord;
+    }
+
+    // 2. Query fallback for staff/admin or booking reference lookup
+    const queueColRef = collection(db, "queues", doctorId, "patients");
     const qRef = query(
       queueColRef,
       where("date", "==", today),
       where("bookingReference", "==", cleanTerm),
       limit(1)
     );
-    const snapRef = await getDocs(qRef);
-    if (!snapRef.empty) {
+    const snapRef = await getDocs(qRef).catch(() => null);
+    if (snapRef && !snapRef.empty) {
       const d = snapRef.docs[0];
       return { id: d.id, ...d.data() } as PatientRecord;
     }
 
-    // 2. Match by Normalized Phone Number
-    const normalizedPhone = normalizePhoneNumber(queryTerm);
     if (normalizedPhone) {
       const qPhone = query(
         queueColRef,
@@ -299,18 +318,11 @@ export async function findTicketByReferenceOrPhone(
         where("phone", "==", normalizedPhone),
         limit(1)
       );
-      const snapPhone = await getDocs(qPhone);
-      if (!snapPhone.empty) {
+      const snapPhone = await getDocs(qPhone).catch(() => null);
+      if (snapPhone && !snapPhone.empty) {
         const d = snapPhone.docs[0];
         return { id: d.id, ...d.data() } as PatientRecord;
       }
-    }
-
-    // 3. Match by direct Patient Record ID or Patient ID
-    const docRef = doc(db, "queues", doctorId, "patients", queryTerm.trim());
-    const docSnap = await getDoc(docRef);
-    if (docSnap.exists()) {
-      return { id: docSnap.id, ...docSnap.data() } as PatientRecord;
     }
 
     return null;
@@ -1070,18 +1082,40 @@ export async function checkActiveBooking(doctorId: string, phone: string): Promi
   const normalizedPhone = normalizePhoneNumber(phone);
   if (!normalizedPhone) return null;
   const today = getTodayDateString();
-  const q = query(
-    collection(db, "queues", doctorId, "patients"),
-    where("date", "==", today),
-    where("phone", "==", normalizedPhone)
-  );
+  const deterministicDocId = `${today}_${normalizedPhone}`;
 
-  const snapshot = await getDocs(q);
-  const activeDoc = snapshot.docs
-    .map(d => ({ id: d.id, ...d.data() } as PatientRecord))
-    .find(p => p.status === 'waiting' || p.status === 'called');
+  // 1. Direct deterministic document lookup (Works for unauthenticated public visitors without list permission)
+  try {
+    const directDocRef = doc(db, "queues", doctorId, "patients", deterministicDocId);
+    const snap = await getDoc(directDocRef);
+    if (snap.exists()) {
+      const p = { id: snap.id, ...snap.data() } as PatientRecord;
+      if (p.status === 'waiting' || p.status === 'called') {
+        return p;
+      }
+    }
+  } catch (err) {
+    console.warn("Direct ticket lookup failed in checkActiveBooking:", err);
+  }
 
-  return activeDoc || null;
+  // 2. Query fallback for authenticated staff/admin or edge-case allocated IDs
+  try {
+    const q = query(
+      collection(db, "queues", doctorId, "patients"),
+      where("date", "==", today),
+      where("phone", "==", normalizedPhone)
+    );
+
+    const snapshot = await getDocs(q);
+    const activeDoc = snapshot.docs
+      .map(d => ({ id: d.id, ...d.data() } as PatientRecord))
+      .find(p => p.status === 'waiting' || p.status === 'called');
+
+    return activeDoc || null;
+  } catch {
+    // If list query is denied by security rules for unauthenticated users, safe return null
+    return null;
+  }
 }
 
 // Add Patient to Queue with rate limiting, subscription checks, and atomic sequence numbers
@@ -4122,65 +4156,86 @@ export async function completeDaySession(
   const sessionRef = doc(db, "doctors", doctorId, "dailySessions", date);
   const nowIso = new Date().toISOString();
 
-  // Ensure all queue patients are swept so no orphaned tickets remain
-  let allPatients = [...patientsToArchive];
+  // 1. Fetch ALL queue patients for this specific date using pagination to exceed 200 safely
+  const queueCol = collection(db, "queues", doctorId, "patients");
+  const allPatientsMap = new Map<string, PatientRecord>();
+
+  // Seed with in-memory patients if they match date
+  patientsToArchive.forEach((p) => {
+    if (!p.date || p.date === date) {
+      allPatientsMap.set(p.id, p);
+    }
+  });
+
   try {
-    const queueCol = collection(db, "queues", doctorId, "patients");
-    const qSnap = await getDocs(query(queueCol, limit(200)));
-    const existingIds = new Set(allPatients.map((p) => p.id));
-    qSnap.forEach((d) => {
-      if (!existingIds.has(d.id)) {
-        allPatients.push({ id: d.id, ...d.data() } as PatientRecord);
+    let lastDoc: any = null;
+    let hasMore = true;
+    while (hasMore) {
+      const constraints: any[] = [
+        where("date", "==", date),
+        limit(150)
+      ];
+      if (lastDoc) {
+        constraints.push(startAfter(lastDoc));
       }
-    });
+      const q = query(queueCol, ...constraints);
+      const snap = await getDocs(q);
+      snap.forEach((d) => {
+        allPatientsMap.set(d.id, { id: d.id, ...d.data() } as PatientRecord);
+      });
+      if (snap.docs.length < 150) {
+        hasMore = false;
+      } else {
+        lastDoc = snap.docs[snap.docs.length - 1];
+      }
+    }
   } catch (e) {
-    console.warn("Could not sweep remaining queue docs:", e);
+    console.warn("Could not paginate remaining queue docs by date:", e);
   }
 
-  // 1. Process patient archive and deletion in chunks (max 150 patients per batch to remain safely below Firestore's 500 limit)
-  const BATCH_CHUNK_SIZE = 150;
+  const allPatients = Array.from(allPatientsMap.values());
+
+  // 2. PHASE 1: Write all patients to the archive subcollection FIRST (batch size 100 to stay safely below limits)
+  const BATCH_CHUNK_SIZE = 100;
   for (let i = 0; i < allPatients.length; i += BATCH_CHUNK_SIZE) {
     const chunk = allPatients.slice(i, i + BATCH_CHUNK_SIZE);
     const batch = writeBatch(db);
-
     chunk.forEach((p) => {
-      const patientId = p.id;
-      const archiveRef = doc(db, "doctors", doctorId, "dailySessions", date, "archivedPatients", patientId);
-      const queueRef = doc(db, "queues", doctorId, "patients", patientId);
-
+      const archiveRef = doc(db, "doctors", doctorId, "dailySessions", date, "archivedPatients", p.id);
       batch.set(archiveRef, removeUndefinedFields({
         ...p,
         archivedAt: nowIso,
         archivedDate: date
-      }));
-      batch.delete(queueRef);
+      }), { merge: true });
     });
-
     await batch.commit();
   }
 
-  // 2. Atomically finalize daily session document and reset daily counter
-  const finalBatch = writeBatch(db);
-  finalBatch.set(
+  // 3. PHASE 2: Persist daily session completion status & summary metrics
+  await setDoc(
     sessionRef,
     removeUndefinedFields({
       ...summary,
+      date,
       status: "completed",
       completedAt: nowIso,
       completedByUid: userUid || "",
-      completedByName: userName || ""
+      completedByName: userName || "",
+      archivedPatientsCount: allPatients.length
     }),
     { merge: true }
   );
 
-  const counterRef = doc(db, "queues", doctorId, "dailyCounters", date);
-  finalBatch.set(counterRef, {
-    lastSequenceNumber: 0,
-    date,
-    updatedAt: nowIso
-  }, { merge: true });
-
-  await finalBatch.commit();
+  // 4. PHASE 3: Safely delete only the confirmed archived records from active queue (only for this specific date)
+  for (let i = 0; i < allPatients.length; i += BATCH_CHUNK_SIZE) {
+    const chunk = allPatients.slice(i, i + BATCH_CHUNK_SIZE);
+    const batch = writeBatch(db);
+    chunk.forEach((p) => {
+      const queueRef = doc(db, "queues", doctorId, "patients", p.id);
+      batch.delete(queueRef);
+    });
+    await batch.commit();
+  }
 }
 
 /**

@@ -695,7 +695,10 @@ export const AiAgentControlCenter: React.FC<AiAgentControlCenterProps> = ({
       const rawMsg = err instanceof Error
         ? err.message
         : (typeof err === 'string' ? err : (typeof err?.message === 'string' ? err.message : ''));
-      const safeMsg = (rawMsg && rawMsg !== '[object Object]') ? rawMsg : 'تعذر إكمال العملية حالياً';
+      let safeMsg = (rawMsg && rawMsg !== '[object Object]') ? rawMsg : 'تعذر إكمال العملية حالياً';
+      if (safeMsg.includes('[object Object]')) {
+        safeMsg = safeMsg.replace(/\[object Object\]/g, 'خطأ في استجابة الخادم').trim();
+      }
       const errMsg: AiAgentMessage = {
         id: `msg_err_${Date.now()}`,
         role: 'assistant',
@@ -827,65 +830,77 @@ export const AiAgentControlCenter: React.FC<AiAgentControlCenterProps> = ({
   return (
     <div className="bg-white rounded-3xl border border-slate-200/90 shadow-xl overflow-hidden flex flex-col h-[750px] max-h-[85vh] relative text-right" dir="rtl">
       {/* Header bar */}
-      <div className="bg-[#122c4a] text-white px-5 py-4 flex items-center justify-between border-b border-slate-700/80 shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-slate-900/90 flex items-center justify-center text-emerald-400 shadow-md border border-slate-700/80">
-            <span className="text-xl leading-none inline-flex items-center justify-center">🤖</span>
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-base sm:text-lg font-black font-['Tajawal',sans-serif] tracking-tight text-white">
-                وكيل دوري الذكي (Dory AI Agent)
-              </h2>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                <span>نشط</span>
-              </span>
+      <div className="bg-[#122c4a] text-white px-3 sm:px-5 py-3 sm:py-4 flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-700/80 shrink-0">
+        <div className="flex items-center justify-between w-full md:w-auto">
+          <div className="flex items-center gap-2.5 sm:gap-3">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-slate-900/90 flex items-center justify-center text-emerald-400 shadow-md border border-slate-700/80 shrink-0">
+              <span className="text-lg sm:text-xl leading-none inline-flex items-center justify-center">🤖</span>
             </div>
-            <p className="text-xs text-slate-300">
-              المساعد التشغيلي الذكي • عيادة: {doctor.clinicName}
-            </p>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm sm:text-lg font-black font-['Tajawal',sans-serif] tracking-tight text-white">
+                  وكيل دوري الذكي (AI Agent)
+                </h2>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                  <span>نشط</span>
+                </span>
+              </div>
+              <p className="text-[11px] sm:text-xs text-slate-300 truncate max-w-[200px] sm:max-w-xs">
+                المساعد التشغيلي الذكي • عيادة: {doctor.clinicName}
+              </p>
+            </div>
           </div>
+
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="md:hidden w-8 h-8 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-300 flex items-center justify-center transition cursor-pointer border border-slate-700/60"
+              title="إغلاق"
+            >
+              ✕
+            </button>
+          )}
         </div>
 
-        {/* Tab Switcher & Close */}
-        <div className="flex items-center gap-2">
-          <div className="bg-slate-900/80 p-1 rounded-xl flex items-center gap-1 text-xs font-bold border border-slate-700/60">
+        {/* Tab Switcher & Desktop Close */}
+        <div className="flex items-center justify-between sm:justify-end gap-2 w-full md:w-auto">
+          <div className="bg-slate-900/80 p-1 rounded-xl flex items-center gap-1 text-xs font-bold border border-slate-700/60 overflow-x-auto no-scrollbar w-full sm:w-auto">
             <button
               onClick={() => setActiveTab('chat')}
-              className={`px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+              className={`flex-1 sm:flex-initial px-2.5 sm:px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center justify-center gap-1 sm:gap-1.5 whitespace-nowrap ${
                 activeTab === 'chat' ? 'bg-[#1b3a5c] text-white shadow-xs border border-slate-600/50' : 'text-slate-300 hover:text-white'
               }`}
             >
               <span className="text-xs leading-none inline-flex items-center justify-center">💬</span>
-              <span>المحادثة والأوامر</span>
+              <span>المحادثة</span>
             </button>
 
             <button
               onClick={() => setActiveTab('tasks')}
-              className={`px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+              className={`flex-1 sm:flex-initial px-2.5 sm:px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center justify-center gap-1 sm:gap-1.5 whitespace-nowrap ${
                 activeTab === 'tasks' ? 'bg-[#1b3a5c] text-white shadow-xs border border-slate-600/50' : 'text-slate-300 hover:text-white'
               }`}
             >
               <span className="text-xs leading-none inline-flex items-center justify-center">⚡</span>
-              <span>المهام الذاتية ({tasks.length})</span>
+              <span>المهام ({tasks.length})</span>
             </button>
 
             <button
               onClick={() => setActiveTab('audit')}
-              className={`px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+              className={`flex-1 sm:flex-initial px-2.5 sm:px-3 py-1.5 rounded-lg transition cursor-pointer flex items-center justify-center gap-1 sm:gap-1.5 whitespace-nowrap ${
                 activeTab === 'audit' ? 'bg-[#1b3a5c] text-white shadow-xs border border-slate-600/50' : 'text-slate-300 hover:text-white'
               }`}
             >
               <span className="text-xs leading-none inline-flex items-center justify-center">📊</span>
-              <span>سجل التدقيق</span>
+              <span>التدقيق</span>
             </button>
           </div>
 
           {onClose && (
             <button
               onClick={onClose}
-              className="w-8 h-8 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-300 flex items-center justify-center transition cursor-pointer border border-slate-700/60"
+              className="hidden md:flex w-8 h-8 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-300 items-center justify-center transition cursor-pointer border border-slate-700/60 shrink-0"
               title="إغلاق"
             >
               ✕
@@ -909,30 +924,30 @@ export const AiAgentControlCenter: React.FC<AiAgentControlCenterProps> = ({
         <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50 relative">
           
           {/* Conversation Bar: Current Topic + New Chat + History Drawer Toggle */}
-          <div className="px-4 py-2.5 bg-white border-b border-slate-200/90 flex items-center justify-between gap-3 text-xs shrink-0">
-            <div className="flex items-center gap-2 min-w-0">
+          <div className="px-3 sm:px-4 py-2 sm:py-2.5 bg-white border-b border-slate-200/90 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
+            <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
               <span className="text-sm leading-none inline-flex items-center justify-center text-emerald-600">💬</span>
-              <span className="font-extrabold text-slate-900 truncate max-w-[220px] sm:max-w-md">
+              <span className="font-extrabold text-slate-900 truncate max-w-[140px] sm:max-w-md">
                 {activeConversation?.title || 'محادثة جارية'}
               </span>
-              <span className="text-[11px] text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full font-bold shrink-0">
+              <span className="text-[10px] sm:text-[11px] text-slate-400 bg-slate-100 px-1.5 sm:px-2 py-0.5 rounded-full font-bold shrink-0">
                 {messages.length} رسائل
               </span>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
               <button
                 onClick={handleNewConversation}
-                className="px-3 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200/80 rounded-xl font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                className="px-2.5 sm:px-3 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200/80 rounded-xl font-bold transition flex items-center gap-1 cursor-pointer shadow-2xs text-[11px] sm:text-xs"
                 title="بدء جلسة محادثة جديدة وحفظ السابقة"
               >
                 <span className="text-xs leading-none inline-flex items-center justify-center">➕</span>
-                <span>محادثة جديدة</span>
+                <span>جديدة</span>
               </button>
 
               <button
                 onClick={() => setShowHistoryDrawer(!showHistoryDrawer)}
-                className={`px-3 py-1.5 rounded-xl font-bold border transition flex items-center gap-1.5 cursor-pointer ${
+                className={`px-2.5 sm:px-3 py-1.5 rounded-xl font-bold border transition flex items-center gap-1 cursor-pointer text-[11px] sm:text-xs ${
                   showHistoryDrawer
                     ? 'bg-[#122c4a] text-white border-[#122c4a]'
                     : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
@@ -940,7 +955,7 @@ export const AiAgentControlCenter: React.FC<AiAgentControlCenterProps> = ({
                 title="عرض أرشيف المحادثات السابقة"
               >
                 <span className="text-xs leading-none inline-flex items-center justify-center">📜</span>
-                <span>المحادثات السابقة ({conversations.length})</span>
+                <span>الأرشيف ({conversations.length})</span>
                 <ChevronDown className={`w-3 h-3 transition-transform ${showHistoryDrawer ? 'rotate-180' : ''}`} />
               </button>
             </div>
@@ -1490,7 +1505,8 @@ export const AiAgentControlCenter: React.FC<AiAgentControlCenterProps> = ({
             </div>
           ) : (
             <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
-              <table className="w-full text-right text-xs">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[550px] text-right text-xs">
                 <thead className="bg-slate-100 text-slate-600 font-bold border-b border-slate-200">
                   <tr>
                     <th className="p-3">الوقت</th>
@@ -1539,6 +1555,7 @@ export const AiAgentControlCenter: React.FC<AiAgentControlCenterProps> = ({
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
         </div>
